@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include "asm.h"
 #include "libc.h"
 #include "slab.h"
 #include "trap.h"
@@ -40,13 +41,10 @@ struct boot_page_setup
 
 extern unsigned int page_dir_addr;
 extern unsigned int boot_pages_used;
-
 static spinlock_t kernel_space_lock;
 static unsigned int next_asid;
-
 static struct vm_translation_map kernel_map;
-static struct vm_translation_map *map_list  = &kernel_map;
-
+static struct list_node map_list;
 MAKE_SLAB(translation_map_slab, struct vm_translation_map);
 
 unsigned int boot_vm_allocate_pages(struct boot_page_setup *bps, int num_pages)
@@ -87,7 +85,7 @@ void boot_vm_map_pages(struct boot_page_setup *bps, unsigned int va,
     }
 }
 
-void boot_setup_page_tables(void)
+void boot_setup_page_tables(unsigned int memory_size)
 {
     // Need a local since we can't access globals
     struct boot_page_setup bps;
@@ -101,7 +99,7 @@ void boot_setup_page_tables(void)
                       | PAGE_EXECUTABLE | PAGE_SUPERVISOR | PAGE_GLOBAL);
 
     // Map physical memory alias
-    boot_vm_map_pages(&bps, PHYS_MEM_ALIAS, 0, MEMORY_SIZE, PAGE_PRESENT | PAGE_WRITABLE
+    boot_vm_map_pages(&bps, PHYS_MEM_ALIAS, 0, memory_size, PAGE_PRESENT | PAGE_WRITABLE
                       | PAGE_SUPERVISOR | PAGE_GLOBAL);
 
     // Map initial kernel stacks for all threads
@@ -118,7 +116,8 @@ void boot_setup_page_tables(void)
     // page allocator to allocate page tables, and that won't work until the
     // page tables are allocated.
     boot_vm_map_pages(&bps, KERNEL_HEAP_BASE, boot_vm_allocate_pages(&bps,
-                      PAGE_STRUCTURES_SIZE / PAGE_SIZE), PAGE_STRUCTURES_SIZE,
+                      PAGE_STRUCTURES_SIZE(memory_size) / PAGE_SIZE),
+                      PAGE_STRUCTURES_SIZE(memory_size),
                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_SUPERVISOR | PAGE_GLOBAL);
 
     // Write the page dir address where start.S can find it to initialize
@@ -133,6 +132,7 @@ void boot_setup_page_tables(void)
 // This is called after the MMU has been enabled
 struct vm_translation_map *vm_translation_map_init(void)
 {
+    list_init(&map_list);
     kernel_map.page_dir = __builtin_nyuzi_read_control_reg(10);
     return &kernel_map;
 }
@@ -149,20 +149,13 @@ struct vm_translation_map *create_translation_map(void)
     acquire_spinlock(&kernel_space_lock);
     // Copy kernel page tables into new page directory
     memcpy((unsigned int*) PA_TO_VA(map->page_dir) + 768,
-           (unsigned int*) PA_TO_VA(map_list->page_dir) + 768,
+           (unsigned int*) PA_TO_VA(kernel_map.page_dir) + 768,
            256 * sizeof(unsigned int));
 
     map->asid = next_asid++;
     map->lock = 0;
 
-    // Insert into list (after accessing map_list above, which
-    // we used to find another prototype page directory)
-    map->next = map_list->next;
-    map->prev = &map_list;
-    if (map->next)
-        map->next->prev = &map->next;
-
-    map_list = map;
+    list_add_tail(&map_list, (struct list_node*) map);
     release_spinlock(&kernel_space_lock);
     restore_interrupts(old_flags);
 
@@ -177,10 +170,7 @@ void destroy_translation_map(struct vm_translation_map *map)
 
     old_flags = disable_interrupts();
     acquire_spinlock(&kernel_space_lock);
-    *map->prev = map->next;
-    if (map->next)
-        map->next->prev = map->prev;
-
+    list_remove_node(map);
     release_spinlock(&kernel_space_lock);
     restore_interrupts(old_flags);
 
@@ -203,7 +193,7 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
     int pgtindex = vpindex % 1024;
     unsigned int *pgdir;
     unsigned int *pgtbl;
-    struct vm_translation_map *other_map;
+    struct list_node *other_map;
     unsigned int new_pgt;
     int old_flags;
 
@@ -216,13 +206,13 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
         // The page tables for kernel space are shared by all page directories.
         // Check the first page directory to see if this is present. If not,
         // allocate a new one and stick it into all page directories.
-        pgdir = (unsigned int*) PA_TO_VA(map_list->page_dir);
+        pgdir = (unsigned int*) PA_TO_VA(kernel_map.page_dir);
         if ((pgdir[pgdindex] & PAGE_PRESENT) == 0)
         {
             new_pgt = vm_allocate_page() | PAGE_PRESENT;
-            for (other_map = map_list; other_map; other_map = other_map->next)
+            list_for_each(&map_list, other_map, struct list_node)
             {
-                pgdir = (unsigned int*) PA_TO_VA(other_map->page_dir);
+                pgdir = (unsigned int*) PA_TO_VA(((struct vm_translation_map*)other_map)->page_dir);
                 pgdir[pgdindex] = new_pgt;
             }
         }
@@ -256,3 +246,13 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
         restore_interrupts(old_flags);
     }
 }
+
+void switch_to_translation_map(struct vm_translation_map *map)
+{
+    // XXX if there are more maps that ASIDs and this map doesn't have an
+    // ASID assigned, this must be able to steal it.
+
+    __builtin_nyuzi_write_control_reg(CR_PAGE_DIR_BASE, map->page_dir);
+    __builtin_nyuzi_write_control_reg(CR_CURRENT_ASID, map->asid);
+}
+

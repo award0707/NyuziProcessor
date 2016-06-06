@@ -17,11 +17,13 @@
 #include "asm.h"
 #include "kernel_heap.h"
 #include "libc.h"
+#include "rwlock.h"
 #include "registers.h"
 #include "slab.h"
 #include "thread.h"
 #include "trap.h"
 #include "vm_area_map.h"
+#include "vm_cache.h"
 #include "vm_page.h"
 #include "vm_translation_map.h"
 #include "vm_address_space.h"
@@ -43,17 +45,17 @@ void timer_tick(void)
     reschedule();
 }
 
-void kernel_main(void)
+void kernel_main(unsigned int memory_size)
 {
     struct vm_translation_map *init_map;
 
-    vm_page_init();
+    vm_page_init(memory_size);
     init_map = vm_translation_map_init();
-    boot_init_heap((char*) KERNEL_HEAP_BASE + PAGE_STRUCTURES_SIZE);
+    boot_init_heap((char*) KERNEL_HEAP_BASE + PAGE_STRUCTURES_SIZE(memory_size));
     vm_address_space_init(init_map);
+    bootstrap_vm_cache();
     bool_init_kernel_process();
     boot_init_thread();
-    kprintf("Kernel started\n");
 
     register_interrupt_handler(1, timer_tick);
     start_timer();
@@ -65,6 +67,8 @@ void kernel_main(void)
     REGISTERS[REG_INT_MASK0 + 1] = 2;
     REGISTERS[REG_INT_MASK0 + 2] = 2;
     REGISTERS[REG_INT_MASK0 + 3] = 2;
+
+    spawn_kernel_thread("Grim Reaper", grim_reaper, 0);
 
     exec_program("program.elf");
 
