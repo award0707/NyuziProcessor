@@ -16,24 +16,30 @@
 
 extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
 
-int globalvar;
+// This forces an initialized data region to ensure it is loaded properly
+char str[32] = "Uryyb Jbeyq\n";
 
-unsigned int strlen(const char *str)
+void printstr(const char *str, int length)
 {
-    unsigned int len = 0;
-    while (*str++)
-        len++;
-
-    return len;
+    __syscall(0, (int) str, length, 0, 0, 0);
 }
 
-void printstr(const char *str)
+void rot13(char *str)
 {
-    __syscall(0, (int) str, strlen(str), 0, 0, 0);
+    char *c;
+
+    for (c = str; *c; c++)
+    {
+        if (*c >= 'A' && *c <= 'Z')
+            *c = ((*c - 'A' + 13) % 26) + 'A';
+        else if (*c >= 'a' && *c <= 'z')
+            *c = ((*c - 'a' + 13) % 26) + 'a';
+    }
 }
 
 int main()
 {
-    globalvar = 1;  // Force data segment
-    printstr("Hello World\n");
+    // Reverse the string
+    rot13(str);
+    printstr(str, 12);
 }

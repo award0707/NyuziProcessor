@@ -16,8 +16,6 @@
 
 extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
 
-int globalvar;
-
 unsigned int strlen(const char *str)
 {
     unsigned int len = 0;
@@ -32,8 +30,14 @@ void printstr(const char *str)
     __syscall(0, (int) str, strlen(str), 0, 0, 0);
 }
 
+void __attribute__((noreturn)) exit(int code)
+{
+    __syscall(4, code, 0, 0, 0, 0);
+    for (;;);
+}
+
 int main()
 {
-    globalvar = 1;  // Force data segment
-    printstr("Hello World\n");
+    printstr("Goodbye World\n");
+    exit(1);
 }

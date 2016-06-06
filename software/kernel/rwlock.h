@@ -14,26 +14,27 @@
 // limitations under the License.
 //
 
-extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
+#pragma once
 
-int globalvar;
+#include "list.h"
+#include "spinlock.h"
 
-unsigned int strlen(const char *str)
+//
+// Reader/writer lock
+//
+
+struct rwlock
 {
-    unsigned int len = 0;
-    while (*str++)
-        len++;
+    spinlock_t spinlock;
+    volatile int write_locked;
+    volatile int active_read_count;
+    struct list_node reader_wait_list;
+    struct list_node writer_wait_list;
+};
 
-    return len;
-}
+void init_rwlock(struct rwlock*);
+void rwlock_lock_read(struct rwlock*);
+void rwlock_unlock_read(struct rwlock*);
+void rwlock_lock_write(struct rwlock*);
+void rwlock_unlock_write(struct rwlock*);
 
-void printstr(const char *str)
-{
-    __syscall(0, (int) str, strlen(str), 0, 0, 0);
-}
-
-int main()
-{
-    globalvar = 1;  // Force data segment
-    printstr("Hello World\n");
-}

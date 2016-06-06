@@ -16,19 +16,34 @@
 
 #pragma once
 
-// XXX hack
-#define MEMORY_SIZE 0x1000000
-#define PAGE_STRUCTURES_SIZE (sizeof(struct vm_page) * (MEMORY_SIZE / PAGE_SIZE))
+#include "list.h"
 
+#define PAGE_STRUCTURES_SIZE(memory_size) (sizeof(struct vm_page) * (memory_size \
+    / PAGE_SIZE))
 #define PAGE_SIZE 0x1000
 #define PAGE_ALIGN(x) (x & ~(PAGE_SIZE - 1))
 
+//
+// Each vm_page object represents a page frame of physical memory.
+//
+
 struct vm_page
 {
-    struct vm_page *next;
+    struct list_node list_entry;    // Object or free list
+    struct list_node hash_entry;
+    unsigned int cache_offset;
+    struct vm_cache *cache;
+    volatile int busy;
 };
 
-void vm_page_init(void);
+extern unsigned int memory_size;
+
+void vm_page_init(unsigned int memory_size);
 unsigned int vm_allocate_page(void);
+
+// vm_free_page does not remove the page from its current cache. Calling this
+// without doing that will do bad things.
 void vm_free_page(unsigned int addr);
 struct vm_page *page_for_address(unsigned int addr);
+unsigned int address_for_page(struct vm_page*);
+

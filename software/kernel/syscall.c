@@ -44,7 +44,8 @@ int handle_syscall(int arg0, int arg1, int arg2, int arg3, int arg4,
             return 0;
 
         case 1:
-            spawn_user_thread(current_thread()->proc, arg1, arg2);
+            spawn_user_thread((const char*) arg1, current_thread()->proc, arg2,
+                              (void*) arg3);
             return 0;
 
         case 2: // Get thread ID
@@ -59,6 +60,11 @@ int handle_syscall(int arg0, int arg1, int arg2, int arg3, int arg4,
             else
                 return -1;
         }
+
+        case 4: // Exit
+            thread_exit(arg1);  // This will not return
+
+            return 0;
 
         default:
             panic("Unknown syscall %d\n", arg0);

@@ -30,16 +30,17 @@ extern __attribute__((noreturn)) void  jump_to_user_mode(
     unsigned int inital_pc,
     unsigned int user_stack_ptr);
 extern void context_switch(unsigned int **old_stack_ptr_ptr,
-                           unsigned int *new_stack_ptr,
-                           unsigned int new_page_dir_addr,
-                           unsigned int new_address_space_id);
+                           unsigned int *new_stack_ptr);
 
 struct thread *cur_thread[MAX_HW_THREADS];
-static struct thread_queue ready_q;
 static spinlock_t thread_q_lock;
+static struct list_node ready_q;
+static struct list_node dead_q;
 static int next_thread_id;
 static int next_process_id;
 static struct process *kernel_proc;
+static struct list_node process_list;
+static spinlock_t process_list_lock;
 
 // Used by fault handler when it performs stack switch
 unsigned int trap_kernel_stack[MAX_HW_THREADS];
@@ -47,23 +48,18 @@ unsigned int trap_kernel_stack[MAX_HW_THREADS];
 MAKE_SLAB(thread_slab, struct thread);
 MAKE_SLAB(process_slab, struct process);
 
-void add_thread_to_process(struct process *proc, struct thread *th)
-{
-    th->process_next = proc->thread_list;
-    proc->thread_list = th;
-    if (th->process_next)
-        th->process_next->process_prev = &th->process_next;
-
-    th->process_prev = &proc->thread_list;
-}
-
 void bool_init_kernel_process(void)
 {
+    list_init(&ready_q);
+    list_init(&dead_q);
+    list_init(&process_list);
+
     kernel_proc = slab_alloc(&process_slab);
-    kernel_proc->thread_list = 0;
+    list_init(&kernel_proc->thread_list);
     kernel_proc->space = get_kernel_address_space();
     kernel_proc->id = 0;
     kernel_proc->lock = 0;
+    list_add_tail(&process_list, kernel_proc);
     next_process_id = 1;
 }
 
@@ -75,10 +71,13 @@ void boot_init_thread(void)
     th = slab_alloc(&thread_slab);
     th->state = THREAD_RUNNING;
     th->proc = kernel_proc;
+    th->id = __sync_fetch_and_add(&next_thread_id, 1);
+    strlcpy(th->name, "idle_thread", sizeof(th->name));
+
     cur_thread[current_hw_thread()] = th;
     old_flags = disable_interrupts();
     acquire_spinlock(&kernel_proc->lock);
-    add_thread_to_process(kernel_proc, th);
+    list_add_tail(&kernel_proc->thread_list, &th->process_entry);
     release_spinlock(&kernel_proc->lock);
     restore_interrupts(old_flags);
 }
@@ -88,35 +87,10 @@ struct thread *current_thread(void)
     return cur_thread[current_hw_thread()];
 }
 
-void enqueue_thread(struct thread_queue *q, struct thread *th)
-{
-    if (q->head == 0)
-        q->head = q->tail = th;
-    else
-    {
-        q->tail->queue_next = th;
-        q->tail = th;
-    }
-
-    th->queue_next = 0;
-}
-
-struct thread *dequeue_thread(struct thread_queue *q)
-{
-    struct thread *th = q->head;
-    if (th)
-    {
-        q->head = th->queue_next;
-        if (q->head == 0)
-            q->tail = 0;
-    }
-
-    return th;
-}
-
-struct thread *spawn_thread_internal(struct process *proc,
-                                     void (*kernel_start)(),
-                                     void (*real_start)(void *param),
+struct thread *spawn_thread_internal(const char *name,
+                                     struct process *proc,
+                                     void (*init_func)(),
+                                     thread_start_func_t start_func,
                                      void *param,
                                      int kernel_only)
 {
@@ -124,15 +98,16 @@ struct thread *spawn_thread_internal(struct process *proc,
     struct thread *th;
 
     th = slab_alloc(&thread_slab);
+    strlcpy(th->name, name, sizeof(th->name));
     th->kernel_stack_area = create_area(get_kernel_address_space(),
                                         0xffffffff, KERNEL_STACK_SIZE,
                                         PLACE_SEARCH_DOWN, "kernel stack",
-                                        AREA_WIRED | AREA_WRITABLE, 0);
+                                        AREA_WIRED | AREA_WRITABLE, 0, 0);
     th->kernel_stack_ptr = (unsigned int*) (th->kernel_stack_area->high_address + 1);
     th->current_stack = (unsigned int*) ((unsigned char*) th->kernel_stack_ptr - 0x840);
     th->proc = proc;
-    ((unsigned int*) th->current_stack)[0x814 / 4] = (unsigned int) kernel_start;
-    th->start_func = real_start;
+    ((unsigned int*) th->current_stack)[0x814 / 4] = (unsigned int) init_func;
+    th->start_func = start_func;
     th->param = param;
     th->id = __sync_fetch_and_add(&next_thread_id, 1);
     th->state = THREAD_READY;
@@ -140,23 +115,102 @@ struct thread *spawn_thread_internal(struct process *proc,
     {
         th->user_stack_area = create_area(proc->space, 0xffffffff, 0x10000,
                                           PLACE_SEARCH_DOWN, "user stack",
-                                          AREA_WRITABLE, 0);
+                                          AREA_WRITABLE, 0, 0);
     }
+    else
+        th->user_stack_area = 0;
 
     old_flags = disable_interrupts();
 
     // Stick in process list
     acquire_spinlock(&proc->lock);
-    add_thread_to_process(proc, th);
+    list_add_tail(&proc->thread_list, &th->process_entry);
     release_spinlock(&proc->lock);
 
     // Put into ready queue
     acquire_spinlock(&thread_q_lock);
-    enqueue_thread(&ready_q, th);
+    list_add_tail(&ready_q, th);
     release_spinlock(&thread_q_lock);
     restore_interrupts(old_flags);
 
     return th;
+}
+
+static void destroy_thread(struct thread *th)
+{
+    struct process *proc = th->proc;
+    int old_flags;
+
+    kprintf("cleaning up thread %d (%s)\n", th->id, th->name);
+
+    assert(th->state == THREAD_DEAD);
+
+    old_flags = disable_interrupts();
+    acquire_spinlock(&proc->lock);
+    list_remove_node(&th->process_entry);
+    release_spinlock(&proc->lock);
+    restore_interrupts(old_flags);
+
+    // A thread cannot clean itself up. The kernel stack would go away and
+    // crash.
+    assert(th != current_thread());
+
+    if (th->user_stack_area)
+    {
+        kprintf("free user stack\n");
+        destroy_area(th->proc->space, th->user_stack_area);
+    }
+
+    kprintf("free kernel stack\n");
+    destroy_area(th->proc->space, th->kernel_stack_area);
+    slab_free(&thread_slab, th);
+
+    if (list_is_empty(&proc->thread_list))
+    {
+        kprintf("destroying process %d\n", proc->id);
+
+        // Need to clean up the process
+        old_flags = disable_interrupts();
+        acquire_spinlock(&process_list_lock);
+        list_remove_node(proc);
+        release_spinlock(&process_list_lock);
+        restore_interrupts(old_flags);
+
+        destroy_address_space(proc->space);
+        slab_free(&process_slab, proc);
+    }
+    else
+        dump_process_list();
+}
+
+int grim_reaper(void *ignore)
+{
+    struct thread *th;
+    int old_flags;
+
+    (void) ignore;
+
+    // Pull off dead thread list
+    // call destroy_thread
+    for (;;)
+    {
+        // Dequeue a thread to kill
+        old_flags = disable_interrupts();
+        acquire_spinlock(&thread_q_lock);
+        th = list_remove_head(&dead_q, struct thread);
+        release_spinlock(&thread_q_lock);
+        restore_interrupts(old_flags);
+
+        if (th == 0)
+        {
+            reschedule();   // XXX currently no way to wait
+            continue;
+        }
+
+        kprintf("grim_reaper harvesting thread %d (%s)\n", th->id, th->name);
+        destroy_thread(th);
+        kprintf("it is done\n");
+    }
 }
 
 static void user_thread_kernel_start(void)
@@ -172,12 +226,12 @@ static void user_thread_kernel_start(void)
                       th->user_stack_area->high_address + 1);
 }
 
-struct thread *spawn_user_thread(struct process *proc,
-                                 void (*start_function)(void *param),
+struct thread *spawn_user_thread(const char *name, struct process *proc,
+                                 unsigned int start_address,
                                  void *param)
 {
-    return spawn_thread_internal(proc, user_thread_kernel_start,
-                                 start_function, 0, 0);
+    return spawn_thread_internal(name, proc, user_thread_kernel_start,
+                                 (thread_start_func_t) start_address, 0, 0);
 }
 
 static void kernel_thread_kernel_start(void)
@@ -194,12 +248,12 @@ static void kernel_thread_kernel_start(void)
     thread_exit(1);
 }
 
-struct thread *spawn_kernel_thread(void (*start_function)(void *param),
+struct thread *spawn_kernel_thread(const char *name,
+                                   thread_start_func_t start_func,
                                    void *param)
 {
-    return spawn_thread_internal(kernel_proc,
-                                 kernel_thread_kernel_start,
-                                 start_function, param, 1);
+    return spawn_thread_internal(name, kernel_proc, kernel_thread_kernel_start,
+                                 start_func, param, 1);
 }
 
 void reschedule(void)
@@ -218,13 +272,11 @@ void reschedule(void)
 
     if (old_thread->state == THREAD_RUNNING)
     {
-        // If this thread is not running (blocked or dead),
-        // don't add back to ready queue.
         old_thread->state = THREAD_READY;
-        enqueue_thread(&ready_q, old_thread);
+        list_add_tail(&ready_q, old_thread);
     }
 
-    next_thread = dequeue_thread(&ready_q);
+    next_thread = list_remove_head(&ready_q, struct thread);
     assert(next_thread);
     next_thread->state = THREAD_RUNNING;
 
@@ -232,10 +284,8 @@ void reschedule(void)
     {
         cur_thread[hwthread] = next_thread;
         trap_kernel_stack[hwthread] = (unsigned int) next_thread->kernel_stack_ptr;
-        context_switch(&old_thread->current_stack,
-                       next_thread->current_stack,
-                       next_thread->proc->space->translation_map->page_dir,
-                       next_thread->proc->space->translation_map->asid);
+        switch_to_translation_map(next_thread->proc->space->translation_map);
+        context_switch(&old_thread->current_stack, next_thread->current_stack);
     }
 
     release_spinlock(&thread_q_lock);
@@ -260,11 +310,19 @@ struct process *exec_program(const char *filename)
 {
     struct process *proc;
     unsigned int entry_point;
+    int old_flags;
 
     proc = slab_alloc(&process_slab);
     proc->id = __sync_fetch_and_add(&next_process_id, 1);
     proc->space = create_address_space();
     proc->lock = 0;
+    list_init(&proc->thread_list);
+
+    old_flags = disable_interrupts();
+    acquire_spinlock(&process_list_lock);
+    list_add_tail(&process_list, proc);
+    release_spinlock(&process_list_lock);
+    restore_interrupts(old_flags);
 
     if (load_program(proc, filename, &entry_point) < 0)
     {
@@ -273,18 +331,68 @@ struct process *exec_program(const char *filename)
         return 0;
     }
 
-    spawn_thread_internal(proc, new_process_start, entry_point, 0, 0);
+    spawn_thread_internal("user_thread", proc, new_process_start,
+        (thread_start_func_t) entry_point, 0, 0);
     return proc;
 }
 
 void thread_exit(int retcode)
 {
+    struct thread *th = current_thread();
     (void) retcode;
 
-    // XXX need to reap this threads resources
-    current_thread()->state = THREAD_DEAD;
+    kprintf("thread %d (%s) exited\n", th->id, th->name);
+
+    // Disable pre-emption
+    disable_interrupts();
+
+    acquire_spinlock(&thread_q_lock);
+    list_add_tail(&dead_q, th);
+    release_spinlock(&thread_q_lock);
+    th->state = THREAD_DEAD;
     reschedule();
 
+    // Never will return...
+
     panic("dead thread was rescheduled!");
+}
+
+void make_thread_ready(struct thread *th)
+{
+    int old_flags;
+
+    assert(th->state != THREAD_READY);
+    assert(th->state != THREAD_RUNNING);
+    assert(th->state != THREAD_DEAD);
+
+    old_flags = disable_interrupts();
+    acquire_spinlock(&thread_q_lock);
+    th->state = THREAD_READY;
+    list_add_tail(&ready_q, th);
+    release_spinlock(&thread_q_lock);
+    restore_interrupts(old_flags);
+}
+
+void dump_process_list(void)
+{
+    int old_flags;
+    struct process *proc;
+    struct thread *th;
+
+    kprintf("process list\n");
+    old_flags = disable_interrupts();
+    acquire_spinlock(&process_list_lock);
+    list_for_each(&process_list, proc, struct process)
+    {
+        kprintf("process %d\n", proc->id);
+        acquire_spinlock(&proc->lock);
+        multilist_for_each(&proc->thread_list, th, process_entry, struct thread)
+            kprintf("  thread %d %p %s\n", th->id, th, th->name);
+
+        release_spinlock(&proc->lock);
+    }
+
+    release_spinlock(&process_list_lock);
+    restore_interrupts(old_flags);
 }
 

@@ -20,6 +20,7 @@
 // Translation map abstracts hardware address translation
 //
 
+#include "list.h"
 #include "memory_map.h"
 #include "spinlock.h"
 
@@ -33,9 +34,8 @@
 
 struct vm_translation_map
 {
+    struct list_node list_entry;
     spinlock_t lock;
-    struct vm_translation_map *next;
-    struct vm_translation_map **prev;
     unsigned int page_dir;
     unsigned int asid;
 };
@@ -44,3 +44,6 @@ struct vm_translation_map *vm_translation_map_init(void);
 struct vm_translation_map *create_translation_map(void);
 void destroy_translation_map(struct vm_translation_map*);
 void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int pa);
+
+// Switch to a new address space
+void switch_to_translation_map(struct vm_translation_map *map);
