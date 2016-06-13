@@ -74,6 +74,15 @@ void writeSerialLong(unsigned int value)
 
 int main()
 {
+    for(int i=0; i<10; i++) {
+        REGISTERS[REG_RED_LED] = 1; 
+	for(int j=0; j<10000; j++)
+	;
+        REGISTERS[REG_RED_LED] = 0;
+	for(int j=0; j<10000; j++)
+	;
+    }
+
     // Turn on red LED to indicate bootloader is waiting
     REGISTERS[REG_RED_LED] = 0x1;
     REGISTERS[REG_UART_DIVISOR] = (CLOCK_RATE / DEFAULT_UART_BAUD) - 1;

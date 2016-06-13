@@ -54,7 +54,8 @@ int openSerialPort(const char *path)
     // Configure serial options
     memset(&serialopts, 0, sizeof(serialopts));
     serialopts.c_cflag = CS8 | CLOCAL | CREAD;
-    cfsetspeed(&serialopts, 921600);
+    //cfsetspeed(&serialopts, 921600);
+    cfsetspeed(&serialopts,115200);
     if (tcsetattr(serialFd, TCSANOW, &serialopts) != 0)
     {
         perror("Unable to initialize serial port");
@@ -301,6 +302,7 @@ int pingTarget(int serialFd)
             targetReady = 1;
             break;
         }
+	printf(" Got 0x%02x\n", ch);
     }
 
     if (!targetReady)
