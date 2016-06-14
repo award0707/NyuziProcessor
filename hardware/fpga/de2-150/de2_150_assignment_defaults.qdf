@@ -134,7 +134,7 @@ set_global_assignment -name DEVICE_FILTER_SPEED_GRADE Any
 set_global_assignment -name EDA_DESIGN_ENTRY_SYNTHESIS_TOOL "<None>"
 set_global_assignment -name VERILOG_INPUT_VERSION Verilog_2001
 set_global_assignment -name VHDL_INPUT_VERSION VHDL_1993
-set_global_assignment -name FAMILY -value "Cyclone V"
+set_global_assignment -name FAMILY -value "Cyclone IV GX"
 set_global_assignment -name TRUE_WYSIWYG_FLOW Off
 set_global_assignment -name SMART_COMPILE_IGNORES_TDC_FOR_STRATIX_PLL_CHANGES Off
 set_global_assignment -name STATE_MACHINE_PROCESSING Auto

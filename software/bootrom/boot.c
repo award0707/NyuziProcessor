@@ -24,7 +24,7 @@
 //
 
 #define CLOCK_RATE 50000000
-#define DEFAULT_UART_BAUD 921600
+#define DEFAULT_UART_BAUD 38400 
 
 void *memset(void *_dest, int value, unsigned int length);
 
@@ -74,15 +74,6 @@ void writeSerialLong(unsigned int value)
 
 int main()
 {
-    for(int i=0; i<10; i++) {
-        REGISTERS[REG_RED_LED] = 1; 
-	for(int j=0; j<10000; j++)
-	;
-        REGISTERS[REG_RED_LED] = 0;
-	for(int j=0; j<10000; j++)
-	;
-    }
-
     // Turn on red LED to indicate bootloader is waiting
     REGISTERS[REG_RED_LED] = 0x1;
     REGISTERS[REG_UART_DIVISOR] = (CLOCK_RATE / DEFAULT_UART_BAUD) - 1;
@@ -130,7 +121,7 @@ int main()
 
             default:
                 writeSerialByte(BAD_COMMAND);
-        }
+	}
     }
 }
 

@@ -55,7 +55,7 @@ int openSerialPort(const char *path)
     memset(&serialopts, 0, sizeof(serialopts));
     serialopts.c_cflag = CS8 | CLOCAL | CREAD;
     //cfsetspeed(&serialopts, 921600);
-    cfsetspeed(&serialopts,115200);
+    cfsetspeed(&serialopts,38400);
     if (tcsetattr(serialFd, TCSANOW, &serialopts) != 0)
     {
         perror("Unable to initialize serial port");
