@@ -23,6 +23,12 @@
 #define PAGE_SIZE 0x1000
 #define PAGE_ALIGN(x) (x & ~(PAGE_SIZE - 1))
 
+#if 0
+    #define VM_DEBUG(...) kprintf(__VA_ARGS__)
+#else
+    #define VM_DEBUG(...) do {} while(0)
+#endif
+
 //
 // Each vm_page object represents a page frame of physical memory.
 //
@@ -34,16 +40,16 @@ struct vm_page
     unsigned int cache_offset;
     struct vm_cache *cache;
     volatile int busy;
+    int dirty;
+    volatile int ref_count;
 };
 
 extern unsigned int memory_size;
 
 void vm_page_init(unsigned int memory_size);
-unsigned int vm_allocate_page(void);
-
-// vm_free_page does not remove the page from its current cache. Calling this
-// without doing that will do bad things.
-void vm_free_page(unsigned int addr);
-struct vm_page *page_for_address(unsigned int addr);
-unsigned int address_for_page(struct vm_page*);
-
+struct vm_page *vm_allocate_page(void);
+void inc_page_ref(struct vm_page*);
+void dec_page_ref(struct vm_page*);
+struct vm_page *pa_to_page(unsigned int addr);
+unsigned int page_to_pa(const struct vm_page*);
+unsigned int allocate_contiguous_memory(unsigned int size);

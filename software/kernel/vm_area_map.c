@@ -32,9 +32,8 @@ static struct vm_area *alloc_area(unsigned int low_address, unsigned int size)
 static struct vm_area *search_up(struct vm_area_map *map, unsigned int address,
                                  unsigned int size)
 {
-    struct vm_area *new_area;
     struct vm_area *next_area;
-    int hole_start = map->low_address;
+    unsigned int hole_start = map->low_address;
 
     if (address + size > map->high_address)
         return 0;
@@ -85,9 +84,8 @@ static struct vm_area *search_up(struct vm_area_map *map, unsigned int address,
 static struct vm_area *search_down(struct vm_area_map *map, unsigned int address,
                                    unsigned int size)
 {
-    struct vm_area *new_area;
     struct vm_area *prev_area = list_peek_tail(&map->area_list, struct vm_area);
-    int hole_end = map->high_address;
+    unsigned int hole_end = map->high_address;
 
     if (address - size < map->low_address)
         return 0;
@@ -135,8 +133,7 @@ static struct vm_area *insert_fixed(struct vm_area_map *map, unsigned int addres
                                     unsigned int size)
 {
     struct vm_area *next_area;
-    struct vm_area *new_area;
-    int hole_start = map->low_address;
+    unsigned int hole_start = map->low_address;
 
     if (address < map->low_address || address + size - 1 > map->high_address
         || address + size - 1 < address)
@@ -194,9 +191,6 @@ struct vm_area *create_vm_area(struct vm_area_map *map, unsigned int address,
         case PLACE_SEARCH_UP:
             area = search_up(map, address, size);
             break;
-
-        default:
-            panic("create_vm_area: unknown placement");
     }
 
     if (area)
@@ -205,12 +199,13 @@ struct vm_area *create_vm_area(struct vm_area_map *map, unsigned int address,
         area->flags = flags;
         area->cache = 0;
         area->cache_offset = 0;
+        area->cache_length = 0;
     }
 
     return area;
 }
 
-void destroy_vm_area(struct vm_area_map *map, struct vm_area *area)
+void destroy_vm_area(struct vm_area *area)
 {
     list_remove_node(area);
     slab_free(&area_slab, area);
@@ -339,7 +334,7 @@ void test_area_map(void)
 
     for (i = 0; i < 8; i++)
     {
-        destroy_vm_area(&map, areas[i]);
+        destroy_vm_area(areas[i]);
         areas[i] = 0;
     }
 
@@ -358,7 +353,7 @@ void test_area_map(void)
         if (areas[slot] != 0)
         {
             expect_count--;
-            destroy_vm_area(&map, areas[slot]);
+            destroy_vm_area(areas[slot]);
         }
 
         expect_count++;
@@ -394,7 +389,7 @@ void test_area_map(void)
             {
                 if (areas[slot] != 0)
                 {
-                    destroy_vm_area(&map, areas[slot]);
+                    destroy_vm_area(areas[slot]);
                     areas[slot] = 0;
                 }
             }
@@ -414,12 +409,12 @@ void test_area_map(void)
     areas[0] = create_vm_area(&map, 0xffffffff, 0x8000, PLACE_SEARCH_DOWN, "", 0);
     assert(create_vm_area(&map, areas[0]->low_address - 0x1000, 0x2000,
                           PLACE_SEARCH_UP, "", 0) == 0);
-    destroy_vm_area(&map, areas[0]);
+    destroy_vm_area(areas[0]);
 
     areas[0] = create_vm_area(&map, 0, 0x8000, PLACE_SEARCH_UP, "", 0);
     assert(create_vm_area(&map, areas[0]->high_address + 0x1000, 0x2000,
                           PLACE_SEARCH_DOWN, "", 0) == 0);
-    destroy_vm_area(&map, areas[0]);
+    destroy_vm_area(areas[0]);
 
     // Create a few fixed areas for next tests
     areas[0] = create_vm_area(&map, 0x30000000, 0x2000, PLACE_EXACT, "", 0);
@@ -451,7 +446,7 @@ void test_area_map(void)
 
     for (i = 0; i < 3; i++)
     {
-        destroy_vm_area(&map, areas[i]);
+        destroy_vm_area(areas[i]);
         areas[i] = 0;
     }
 
@@ -487,7 +482,7 @@ void test_area_map(void)
 
     for (i = 0; i < 4; i++)
     {
-        destroy_vm_area(&map, areas[i]);
+        destroy_vm_area(areas[i]);
         areas[i] = 0;
     }
 

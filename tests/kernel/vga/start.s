@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Jeff Bush
+// Copyright 2016 Jeff Bush
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,11 @@
 // limitations under the License.
 //
 
-#include "performance_counters.h"
-#include "registers.h"
+                .globl _start
+_start:         call main
+1:              goto 1b
 
-void setPerfCounterEvent(int counter, enum PerformanceEvent event)
-{
-    if (counter >= 0 && counter < NUM_COUNTERS)
-        REGISTERS[REG_PERF0_SEL + counter] = event;
-}
 
-unsigned int readPerfCounter(int counter)
-{
-    if (counter >= 0 && counter < NUM_COUNTERS)
-        return REGISTERS[REG_PERF0_VAL + counter];
-    else
-        return 0;
-}
-
+                .globl __syscall
+__syscall:      syscall
+                ret

@@ -29,10 +29,10 @@ struct vm_cache
     struct list_node page_list;
     struct file_handle *file;
     volatile int ref_count;
+    struct vm_cache *source;
 };
 
 void bootstrap_vm_cache(void);
-
 
 void lock_vm_cache(void);
 void unlock_vm_cache(void);
@@ -43,7 +43,7 @@ void inc_cache_ref(struct vm_cache *cache);
 void dec_cache_ref(struct vm_cache *cache);
 
 // All of these must be called with the vm_cache lock held.
-struct vm_cache *create_vm_cache(void);
+struct vm_cache *create_vm_cache(struct vm_cache *source);
 void insert_cache_page(struct vm_cache *, unsigned int offset,  struct vm_page*);
-struct vm_page *lookup_cache_page(struct vm_cache*, unsigned int offset);
+struct vm_page *lookup_cache_page(const struct vm_cache*, unsigned int offset);
 void remove_cache_page(struct vm_page *page);

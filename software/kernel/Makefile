@@ -18,7 +18,7 @@ TOPDIR=../../
 
 include $(TOPDIR)/build/target.mk
 
-CFLAGS=-O3 # Override default CFLAGS
+CFLAGS=-O3  -Wall -W # Override default CFLAGS
 BASE_ADDRESS=0xc0000000
 
 SRCS=main.c \
@@ -41,7 +41,8 @@ SRCS=main.c \
 	vm_address_space.c \
 	vm_cache.c \
 	syscall.c \
-	user_copy.S
+	user_copy.S \
+	vga.c
 
 OBJS=$(SRCS_TO_OBJS)
 DEPS=$(SRCS_TO_DEPS)

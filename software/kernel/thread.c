@@ -45,8 +45,8 @@ static spinlock_t process_list_lock;
 // Used by fault handler when it performs stack switch
 unsigned int trap_kernel_stack[MAX_HW_THREADS];
 
-MAKE_SLAB(thread_slab, struct thread);
-MAKE_SLAB(process_slab, struct process);
+MAKE_SLAB(thread_slab, struct thread)
+MAKE_SLAB(process_slab, struct process)
 
 void bool_init_kernel_process(void)
 {
@@ -141,7 +141,7 @@ static void destroy_thread(struct thread *th)
     struct process *proc = th->proc;
     int old_flags;
 
-    kprintf("cleaning up thread %d (%s)\n", th->id, th->name);
+    VM_DEBUG("cleaning up thread %d (%s)\n", th->id, th->name);
 
     assert(th->state == THREAD_DEAD);
 
@@ -157,17 +157,17 @@ static void destroy_thread(struct thread *th)
 
     if (th->user_stack_area)
     {
-        kprintf("free user stack\n");
+        VM_DEBUG("free user stack\n");
         destroy_area(th->proc->space, th->user_stack_area);
     }
 
-    kprintf("free kernel stack\n");
+    VM_DEBUG("free kernel stack\n");
     destroy_area(th->proc->space, th->kernel_stack_area);
     slab_free(&thread_slab, th);
 
     if (list_is_empty(&proc->thread_list))
     {
-        kprintf("destroying process %d\n", proc->id);
+        VM_DEBUG("destroying process %d\n", proc->id);
 
         // Need to clean up the process
         old_flags = disable_interrupts();
@@ -179,8 +179,6 @@ static void destroy_thread(struct thread *th)
         destroy_address_space(proc->space);
         slab_free(&process_slab, proc);
     }
-    else
-        dump_process_list();
 }
 
 int grim_reaper(void *ignore)
@@ -207,13 +205,13 @@ int grim_reaper(void *ignore)
             continue;
         }
 
-        kprintf("grim_reaper harvesting thread %d (%s)\n", th->id, th->name);
+        VM_DEBUG("grim_reaper harvesting thread %d (%s)\n", th->id, th->name);
         destroy_thread(th);
-        kprintf("it is done\n");
+        VM_DEBUG("it is done\n");
     }
 }
 
-static void user_thread_kernel_start(void)
+static void __attribute__((noreturn)) user_thread_kernel_start(void)
 {
     struct thread *th = current_thread();
 
@@ -230,11 +228,13 @@ struct thread *spawn_user_thread(const char *name, struct process *proc,
                                  unsigned int start_address,
                                  void *param)
 {
+    (void) param;
+
     return spawn_thread_internal(name, proc, user_thread_kernel_start,
                                  (thread_start_func_t) start_address, 0, 0);
 }
 
-static void kernel_thread_kernel_start(void)
+static void __attribute__((noreturn)) kernel_thread_kernel_start(void)
 {
     struct thread *th = current_thread();
 
@@ -292,7 +292,7 @@ void reschedule(void)
     restore_interrupts(old_flags);
 }
 
-static void new_process_start(void)
+static void __attribute__((noreturn)) new_process_start(void)
 {
     struct thread *th = current_thread();
 
@@ -341,7 +341,7 @@ void thread_exit(int retcode)
     struct thread *th = current_thread();
     (void) retcode;
 
-    kprintf("thread %d (%s) exited\n", th->id, th->name);
+    VM_DEBUG("thread %d (%s) exited\n", th->id, th->name);
 
     // Disable pre-emption
     disable_interrupts();

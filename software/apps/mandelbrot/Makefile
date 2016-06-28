@@ -18,14 +18,14 @@ TOPDIR=../../../
 
 include $(TOPDIR)/build/target.mk
 
-LIBS=-lc -los
+LIBS=-lc
 SRCS=mandelbrot.c
 
-OBJS := $(TOPDIR)/software/libs/libc/crt0.o $(SRCS_TO_OBJS)
+OBJS := $(SRCS_TO_OBJS)
 DEPS := $(SRCS_TO_DEPS)
 
-$(OBJ_DIR)/mandelbrot.hex: $(OBJS)
-	$(LD) -o $(OBJ_DIR)/mandelbrot.elf $(LDFLAGS) $(OBJS) $(LIBS) $(LDFLAGS)
+$(OBJ_DIR)/mandelbrot.hex: $(CRT0_BARE) $(OBJS)
+	$(LD) -o $(OBJ_DIR)/mandelbrot.elf $(LDFLAGS) $(CRT0_BARE) $(OBJS) $(LIBS) -los-bare $(LDFLAGS)
 	$(ELF2HEX) -o $(OBJ_DIR)/mandelbrot.hex $(OBJ_DIR)/mandelbrot.elf
 
 run: $(OBJ_DIR)/mandelbrot.hex
@@ -36,11 +36,21 @@ verirun: $(OBJ_DIR)/mandelbrot.hex
 	$(VERILATOR) +memdumpfile=$(OBJ_DIR)/output.bin +memdumpbase=0x200000 +memdumplen=0x12C000 +bin=$(OBJ_DIR)/mandelbrot.hex
 	@convert -depth 8 -size 640x480 rgba:$(OBJ_DIR)/output.bin output.png
 
+krun: fsimage.bin
+	$(EMULATOR) -b fsimage.bin -f 640x480 $(TOPDIR)/software/kernel/kernel.hex
+
+fsimage.bin: $(OBJ_DIR)/program.elf
+	$(MKFS) fsimage.bin $(OBJ_DIR)/program.elf
+
+# program.elf is the image that is executed by the kernel
+$(OBJ_DIR)/program.elf: $(OBJS)
+	$(LD) -o $(OBJ_DIR)/program.elf -Ttext=0x1000 $(LDFLAGS) $(CRT0_KERN) $(OBJS) $(LIBS) -los-kern $(LDFLAGS)
+
 fpgarun: $(OBJ_DIR)/mandelbrot.hex
 	$(SERIAL_BOOT) $(SERIAL_PORT) $(OBJ_DIR)/mandelbrot.hex
 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJ_DIR) fsimage.bin
 
 -include $(DEPS)
 

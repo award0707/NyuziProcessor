@@ -45,9 +45,9 @@ static spinlock_t kernel_space_lock;
 static unsigned int next_asid;
 static struct vm_translation_map kernel_map;
 static struct list_node map_list;
-MAKE_SLAB(translation_map_slab, struct vm_translation_map);
+MAKE_SLAB(translation_map_slab, struct vm_translation_map)
 
-unsigned int boot_vm_allocate_pages(struct boot_page_setup *bps, int num_pages)
+unsigned int boot_vm_allocate_pages(struct boot_page_setup *bps, unsigned int num_pages)
 {
     unsigned int pa = bps->next_alloc_page;
     bps->next_alloc_page += PAGE_SIZE * num_pages;
@@ -108,7 +108,7 @@ void boot_setup_page_tables(unsigned int memory_size)
                       | PAGE_SUPERVISOR | PAGE_GLOBAL);
 
     // Map device registers
-    boot_vm_map_pages(&bps, DEVICE_REG_BASE, DEVICE_REG_BASE, PAGE_SIZE, PAGE_PRESENT
+    boot_vm_map_pages(&bps, DEVICE_REG_BASE, DEVICE_REG_BASE, 0x10000, PAGE_PRESENT
                       | PAGE_WRITABLE | PAGE_SUPERVISOR | PAGE_GLOBAL);
 
     // Map preallocated space on the kernel heap for page structures. This
@@ -143,7 +143,7 @@ struct vm_translation_map *create_translation_map(void)
     int old_flags;
 
     map = slab_alloc(&translation_map_slab);
-    map->page_dir = vm_allocate_page();
+    map->page_dir = page_to_pa(vm_allocate_page());
 
     old_flags = disable_interrupts();
     acquire_spinlock(&kernel_space_lock);
@@ -179,10 +179,10 @@ void destroy_translation_map(struct vm_translation_map *map)
     for (i = 0; i < 768; i++)
     {
         if (pgdir[i] & PAGE_PRESENT)
-            vm_free_page(PAGE_ALIGN(pgdir[i]));
+            dec_page_ref(pa_to_page(PAGE_ALIGN(pgdir[i])));
     }
 
-    vm_free_page(map->page_dir);
+    dec_page_ref(pa_to_page(map->page_dir));
     slab_free(&translation_map_slab, map);
 }
 
@@ -209,7 +209,7 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
         pgdir = (unsigned int*) PA_TO_VA(kernel_map.page_dir);
         if ((pgdir[pgdindex] & PAGE_PRESENT) == 0)
         {
-            new_pgt = vm_allocate_page() | PAGE_PRESENT;
+            new_pgt = page_to_pa(vm_allocate_page()) | PAGE_PRESENT;
             list_for_each(&map_list, other_map, struct list_node)
             {
                 pgdir = (unsigned int*) PA_TO_VA(((struct vm_translation_map*)other_map)->page_dir);
@@ -220,7 +220,7 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
         // Now add entry to the page table
         pgtbl = (unsigned int*) PAGE_ALIGN(pgdir[pgdindex]);
         ((unsigned int*)PA_TO_VA(pgtbl))[pgtindex] = pa;
-        asm("tlbinval %0" : : "s" (va));
+        __asm__("tlbinval %0" : : "s" (va));
 
         // XXX need to invalidate on other cores
 
@@ -234,17 +234,68 @@ void vm_map_page(struct vm_translation_map *map, unsigned int va, unsigned int p
         acquire_spinlock(&map->lock);
         pgdir = (unsigned int*) PA_TO_VA(map->page_dir);
         if ((pgdir[pgdindex] & PAGE_PRESENT) == 0)
-            pgdir[pgdindex] = vm_allocate_page() | PAGE_PRESENT;
+            pgdir[pgdindex] = page_to_pa(vm_allocate_page()) | PAGE_PRESENT;
 
         pgtbl = (unsigned int*) PAGE_ALIGN(pgdir[pgdindex]);
         ((unsigned int*)PA_TO_VA(pgtbl))[pgtindex] = pa;
-        asm("tlbinval %0" : : "s" (va));
+        __asm__("tlbinval %0" : : "s" (va));
 
         // XXX need to invalidate on other cores
 
         release_spinlock(&map->lock);
         restore_interrupts(old_flags);
     }
+}
+
+unsigned int query_translation_map(struct vm_translation_map *map, unsigned int va)
+{
+    int vpindex = va / PAGE_SIZE;
+    int pgdindex = vpindex / 1024;
+    int pgtindex = vpindex % 1024;
+    unsigned int *pgdir;
+    unsigned int *pgtbl;
+    int old_flags;
+    unsigned int ptentry;
+
+    if (va >= KERNEL_BASE)
+    {
+        // Check kernel space
+        old_flags = disable_interrupts();
+        acquire_spinlock(&kernel_space_lock);
+
+        // The page tables for kernel space are shared by all page directories.
+        // Check the first page directory to see if this is present.
+        pgdir = (unsigned int*) PA_TO_VA(kernel_map.page_dir);
+        if ((pgdir[pgdindex] & PAGE_PRESENT) == 0)
+            ptentry = 0;
+        else
+        {
+            pgtbl = (unsigned int*) PAGE_ALIGN(pgdir[pgdindex]);
+            ptentry = ((unsigned int*)PA_TO_VA(pgtbl))[pgtindex];
+        }
+
+        release_spinlock(&kernel_space_lock);
+        restore_interrupts(old_flags);
+    }
+    else
+    {
+        // Check this user space
+        old_flags = disable_interrupts();
+        acquire_spinlock(&map->lock);
+        pgdir = (unsigned int*) PA_TO_VA(map->page_dir);
+        if ((pgdir[pgdindex] & PAGE_PRESENT) == 0)
+            ptentry = 0;
+        else
+        {
+            pgtbl = (unsigned int*) PAGE_ALIGN(pgdir[pgdindex]);
+            ptentry = ((unsigned int*)PA_TO_VA(pgtbl))[pgtindex];
+        }
+
+        release_spinlock(&map->lock);
+        restore_interrupts(old_flags);
+    }
+
+    return ptentry;
 }
 
 void switch_to_translation_map(struct vm_translation_map *map)

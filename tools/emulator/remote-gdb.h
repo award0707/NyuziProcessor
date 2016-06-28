@@ -14,24 +14,9 @@
 // limitations under the License.
 //
 
+#ifndef __REMOTE_GDB_H
+#define __REMOTE_GDB_H
 
-#pragma once
+void remote_gdb_main_loop(struct core*, bool enable_fb_window);
 
-// Read only SDMMC block device driver.
-
-#define BLOCK_SIZE 512
-
-#ifdef __cplusplus
-extern "C" {
 #endif
-
-int initSdmmcDevice();
-
-// Read a single BLOCK_SIZE block from the given byte offset in the device into
-// the passed buffer.
-int readSdmmcDevice(unsigned int offset, void *ptr);
-
-#ifdef __cplusplus
-}
-#endif
-

@@ -21,7 +21,6 @@
 #include "vm_page.h"
 #include "vm_translation_map.h"
 
-static unsigned int next_alloc_page;
 static spinlock_t page_lock;
 extern int boot_pages_used;
 
@@ -49,7 +48,7 @@ void vm_page_init(unsigned int memory)
     }
 }
 
-unsigned int vm_allocate_page(void)
+struct vm_page *vm_allocate_page(void)
 {
     struct vm_page *page;
     unsigned int pa;
@@ -58,40 +57,107 @@ unsigned int vm_allocate_page(void)
     old_flags = disable_interrupts();
     acquire_spinlock(&page_lock);
     page = list_remove_head(&free_page_list, struct vm_page);
-    page->busy = 0;
-    page->cache = 0;
-    release_spinlock(&page_lock);
-    restore_interrupts(old_flags);
     if (page == 0)
         panic("Out of memory!");
+
+    page->busy = 0;
+    page->cache = 0;
+    page->dirty = 0;
+    page->ref_count = 1;
+    release_spinlock(&page_lock);
+    restore_interrupts(old_flags);
 
     pa = (page - pages) * PAGE_SIZE;
 
     memset((void*) PA_TO_VA(pa), 0, PAGE_SIZE);
 
-    return pa;
+    return page;
 }
 
-void vm_free_page(unsigned int addr)
+void inc_page_ref(struct vm_page *page)
 {
-    struct vm_page *page = &pages[addr / PAGE_SIZE];
+    __sync_fetch_and_add(&page->ref_count, 1);
+}
+
+void dec_page_ref(struct vm_page *page)
+{
     int old_flags;
 
-    old_flags = disable_interrupts();
-    acquire_spinlock(&page_lock);
-    list_add_head(&free_page_list, page);
-    release_spinlock(&page_lock);
-    restore_interrupts(old_flags);
+    assert(page->ref_count > 0);
+    if (__sync_fetch_and_add(&page->ref_count, -1) == 1)
+    {
+        VM_DEBUG("freeing page pa %08x\n", page_to_pa(page));
+        old_flags = disable_interrupts();
+        acquire_spinlock(&page_lock);
+        list_add_head(&free_page_list, page);
+        release_spinlock(&page_lock);
+        restore_interrupts(old_flags);
+    }
 }
 
-struct vm_page *page_for_address(unsigned int addr)
+struct vm_page *pa_to_page(unsigned int addr)
 {
+    assert(addr < memory_size);
     return &pages[addr / PAGE_SIZE];
 }
 
-unsigned int address_for_page(struct vm_page *page)
+unsigned int page_to_pa(const struct vm_page *page)
 {
     return (page - pages) * PAGE_SIZE;
 }
 
+unsigned int allocate_contiguous_memory(unsigned int size)
+{
+    const unsigned int page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    const unsigned int total_pages = memory_size / PAGE_SIZE;
+    unsigned int base_index = 0;
+    unsigned int page_offset;
+    int found_run;
+    int old_flags;
 
+    old_flags = disable_interrupts();
+    acquire_spinlock(&page_lock);
+
+
+    // Find free range
+    do
+    {
+        // Scan for first free page
+        while (pages[base_index].ref_count > 0)
+        {
+            if (base_index == total_pages - page_count)
+            {
+                release_spinlock(&page_lock);
+                restore_interrupts(old_flags);
+                return 0xffffffff;  // No free range
+            }
+
+            base_index++;
+        }
+
+        // Check if range is free
+        found_run = 1;
+        for (page_offset = 1; page_offset < page_count; page_offset++)
+        {
+            if (pages[base_index + page_offset].ref_count > 0)
+            {
+                base_index += page_offset + 1;
+                found_run = 0;
+                break;
+            }
+        }
+    }
+    while (!found_run);
+
+    // Mark range as allocated
+    for (page_offset = 0; page_offset < page_count; page_offset++)
+    {
+        pages[base_index + page_offset].ref_count = 1;
+        list_remove_node(&pages[base_index + page_offset]);
+    }
+
+    release_spinlock(&page_lock);
+    restore_interrupts(old_flags);
+
+    return base_index * PAGE_SIZE;
+}

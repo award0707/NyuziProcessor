@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <Matrix.h>
+#include <nyuzi.h>
 #include <RenderContext.h>
 #include <RenderTarget.h>
 #include <schedule.h>
@@ -49,16 +50,18 @@ static int kSquareIndices[] = { 0, 1, 2, 2, 3, 0 };
 // All threads start execution here.
 int main()
 {
-    if (__builtin_nyuzi_read_control_reg(0) == 0)
-        initVGA(VGA_MODE_640x480);
-    else
-        workerThread();
+    void *frameBuffer;
+    if (get_current_thread_id() != 0)
+        worker_thread();
 
-    startAllThreads();
+    // Set up render context
+    frameBuffer = init_vga(VGA_MODE_640x480);
+
+    start_all_threads();
 
     RenderContext *context = new RenderContext();
     RenderTarget *renderTarget = new RenderTarget();
-    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, (void*) 0x200000);
+    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, frameBuffer);
     renderTarget->setColorBuffer(colorBuffer);
     context->bindTarget(renderTarget);
     context->bindShader(new ColorShader());

@@ -97,7 +97,7 @@ static int init_file_system(void)
 
 struct file_handle *open_file(const char *path)
 {
-    int directory_index;
+    unsigned int directory_index;
     struct file_handle *handle;
 
     if (!initialized)
@@ -131,6 +131,12 @@ int read_file(struct file_handle *handle, unsigned int offset, void *out_ptr, in
     int offset_in_block;
     int block_number;
     int fs_offset = handle->base_location + offset;
+
+    if (offset + size_to_copy > handle->length)
+        size_to_copy = handle->length - offset;
+
+    if (size_to_copy <= 0)
+        return 0;   // End of file
 
     offset_in_block = fs_offset & (BLOCK_SIZE - 1);
     block_number = fs_offset / BLOCK_SIZE;

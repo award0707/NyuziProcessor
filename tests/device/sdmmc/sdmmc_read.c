@@ -15,7 +15,7 @@
 //
 
 #include <stdio.h>
-#include <sdmmc.h>
+#include <bare-metal/sdmmc.h>
 
 #define TRANSFER_LENGTH 16
 
@@ -23,7 +23,7 @@ int main()
 {
     char *buf = (char*) 0x200000;
 
-    if (initSdmmcDevice() < 0)
+    if (init_sdmmc_device() < 0)
     {
         printf("error initializing card\n");
         return -1;
@@ -31,7 +31,7 @@ int main()
 
     // Read blocks in reverse order to verify address is set correctly.
     for (int i = TRANSFER_LENGTH - 1; i >= 0; i--)
-        readSdmmcDevice(i, buf + i * BLOCK_SIZE);
+        read_sdmmc_device(i, buf + i * BLOCK_SIZE);
 
     return 0;
 }

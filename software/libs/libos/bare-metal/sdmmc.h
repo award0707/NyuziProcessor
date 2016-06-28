@@ -14,11 +14,24 @@
 // limitations under the License.
 //
 
-#include <stdlib.h>
 
-volatile unsigned int gNextAlloc = 0x500000;
+#pragma once
 
-void *sbrk(ptrdiff_t size)
-{
-    return (void*) __sync_fetch_and_add(&gNextAlloc, size);
+// Read only SDMMC block device driver.
+
+#define BLOCK_SIZE 512
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int init_sdmmc_device(void);
+
+// Read a single BLOCK_SIZE block from the given byte offset in the device into
+// the passed buffer.
+int read_sdmmc_device(unsigned int offset, void *ptr);
+
+#ifdef __cplusplus
 }
+#endif
+

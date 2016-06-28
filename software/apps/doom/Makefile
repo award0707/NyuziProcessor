@@ -10,7 +10,7 @@ TOPDIR=../../../
 include $(TOPDIR)/build/target.mk
 
 CFLAGS+=-Wno-unused-const-variable
-LIBS=-lc -los
+LIBS=-lc -los-bare
 
 SRCS=	doomdef.c		\
 		doomstat.c		\
@@ -75,7 +75,7 @@ SRCS=	doomdef.c		\
 		sounds.c \
 		i_main.c \
 
-OBJS := $(TOPDIR)/software/libs/libc/crt0.o $(SRCS_TO_OBJS)
+OBJS := $(CRT0_BARE) $(SRCS_TO_OBJS)
 DEPS := $(SRCS_TO_DEPS)
 
 all: $(OBJ_DIR)/doom.hex fsimage.bin

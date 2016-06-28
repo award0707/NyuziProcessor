@@ -1,5 +1,5 @@
 //
-// Copyright 2011-2015 Jeff Bush
+// Copyright 2016 Jeff Bush
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,22 +14,24 @@
 // limitations under the License.
 //
 
-#include "registers.h"
-#include "uart.h"
+extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
 
-void writeUart(char ch)
+void *init_vga()
 {
-    while ((REGISTERS[REG_UART_STATUS] & UART_TX_READY) == 0)
-        ;	// Wait for space
-
-    REGISTERS[REG_UART_TX] = ch;
+    return (void*) __syscall(5, 0, 0, 0, 0, 0);
 }
 
-unsigned char readUart()
+int main()
 {
-    while ((REGISTERS[REG_UART_STATUS] & UART_RX_READY) == 0)
-        ;	// Wait for characters to be available
+    unsigned int x;
+    unsigned int y;
+    unsigned int *fb;
 
-    return REGISTERS[REG_UART_RX];
+    fb = (unsigned int*) init_vga();
+
+    for (y = 0; y < 480; y++)
+    {
+        for (x = 0; x < 640; x++)
+            fb[y * 640 + x] = x > y ? 0xffff0000 : 0xff00ff00;
+    }
 }
-

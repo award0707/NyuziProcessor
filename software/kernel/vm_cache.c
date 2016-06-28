@@ -24,8 +24,8 @@
 #define NUM_HASH_BUCKETS 37
 
 static spinlock_t cache_lock;
-struct list_node hash_table[NUM_HASH_BUCKETS];
-MAKE_SLAB(cache_slab, struct vm_cache);
+static struct list_node hash_table[NUM_HASH_BUCKETS];
+MAKE_SLAB(cache_slab, struct vm_cache)
 static int debug_cache_lock_owner = -1;
 
 void bootstrap_vm_cache(void)
@@ -36,18 +36,21 @@ void bootstrap_vm_cache(void)
         list_init(&hash_table[i]);
 }
 
-struct vm_cache *create_vm_cache(void)
+struct vm_cache *create_vm_cache(struct vm_cache *source)
 {
     struct vm_cache *cache;
 
     cache = slab_alloc(&cache_slab);
     list_init(&cache->page_list);
     cache->ref_count = 1;
+    cache->source = source;
+    if (source)
+        inc_cache_ref(source);
 
     return cache;
 }
 
-static unsigned int gen_hash(struct vm_cache *cache, unsigned int offset)
+static unsigned int gen_hash(const struct vm_cache *cache, unsigned int offset)
 {
 	return (unsigned int) cache + (unsigned int) offset / PAGE_SIZE;
 }
@@ -60,6 +63,7 @@ void lock_vm_cache(void)
 
 void unlock_vm_cache(void)
 {
+    assert(debug_cache_lock_owner == current_hw_thread());
     debug_cache_lock_owner = -1;
     release_spinlock(&cache_lock);
 }
@@ -72,25 +76,31 @@ void inc_cache_ref(struct vm_cache *cache)
 void dec_cache_ref(struct vm_cache *cache)
 {
     struct vm_page *page;
+    int old_flags;
 
     assert(debug_cache_lock_owner != current_hw_thread());
     assert(cache->ref_count > 0);
 
     if (__sync_fetch_and_add(&cache->ref_count, -1) == 1)
     {
+        if (cache->source)
+            dec_cache_ref(cache->source);
+
+        old_flags = disable_interrupts();
         lock_vm_cache();
-        kprintf("destroying vm_cache %p\n", cache);
+        VM_DEBUG("destroying vm_cache %p\n", cache);
 
         // Free all pages owned by this cache
         while (!list_is_empty(&cache->page_list))
         {
             page = list_peek_head(&cache->page_list, struct vm_page);
             remove_cache_page(page);
-            vm_free_page(address_for_page(page));
-            kprintf("free page %08x\n", address_for_page(page));
+            VM_DEBUG("dec page ref pa %08x\n", page_to_pa(page));
+            dec_page_ref(page);
         }
 
         unlock_vm_cache();
+        restore_interrupts(old_flags);
     }
 }
 
@@ -110,17 +120,16 @@ void insert_cache_page(struct vm_cache *cache, unsigned int offset,
     list_add_tail(&cache->page_list, &page->list_entry);
 }
 
-struct vm_page *lookup_cache_page(struct vm_cache *cache, unsigned int offset)
+struct vm_page *lookup_cache_page(const struct vm_cache *cache, unsigned int offset)
 {
     unsigned int bucket;
     struct vm_page *page;
-    int found = 0;
 
     assert(debug_cache_lock_owner == current_hw_thread());
 
     offset = PAGE_ALIGN(offset);
     bucket = gen_hash(cache, offset) % NUM_HASH_BUCKETS;
-    list_for_each(&hash_table[bucket], page, struct vm_page)
+    multilist_for_each(&hash_table[bucket], page, hash_entry, struct vm_page)
     {
         if (page->cache_offset == offset && page->cache == cache)
             return page;

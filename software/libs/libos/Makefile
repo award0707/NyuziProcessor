@@ -1,5 +1,5 @@
 #
-# Copyright 2011-2015 Jeff Bush
+# Copyright 2011-2016 Jeff Bush
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,34 +14,12 @@
 # limitations under the License.
 #
 
-TOPDIR=../../../
-
-include $(TOPDIR)/build/target.mk
-
-SRCS=schedule.c \
-	sdmmc.c \
-	uart.c \
-	fs.c \
-	keyboard.c \
-	misc.c \
-	sbrk.c \
-	vga.c \
-	performance_counters.c
-
-OBJS := $(SRCS_TO_OBJS)
-DEPS := $(SRCS_TO_DEPS)
-
-all: $(OBJ_DIR) libos.a
-
-libos.a: $(DEPS) $(OBJS)
-	$(AR) r $@ $(OBJS)
+all:
+	cd bare-metal && make
+	cd kernel && make
 
 clean:
-	rm -rf $(OBJ_DIR)
-	rm -f libos.a
-
-$(OBJ_DIR):
-	mkdir -p $(OBJ_DIR)
-
--include $(DEPS)
+	cd bare-metal && make clean
+	cd kernel && make clean
+	rm -f crt0-bare.o libos-bare.a crt0-kern.o libos-kern.a
 

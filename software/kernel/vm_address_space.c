@@ -25,10 +25,11 @@
 
 static struct vm_address_space kernel_address_space;
 
-MAKE_SLAB(address_space_slab, struct vm_address_space);
+MAKE_SLAB(address_space_slab, struct vm_address_space)
 
 static int soft_fault(struct vm_address_space *space,
-                      const struct vm_area *area, unsigned int address);
+                      const struct vm_area *area, unsigned int address,
+                      int is_store);
 
 struct vm_address_space *get_kernel_address_space(void)
 {
@@ -77,13 +78,15 @@ void destroy_address_space(struct vm_address_space *space)
 {
     struct vm_area *area;
 
-    kprintf("destroy_address_space\n");
+    VM_DEBUG("destroy_address_space %p\n", space);
     while ((area = first_area(&space->area_map)) != 0)
     {
-        kprintf("destroy area %s\n", area->name);
+        VM_DEBUG("destroy area %s\n", area->name);
         dec_cache_ref(area->cache);
-        destroy_vm_area(&space->area_map, area);
+        destroy_vm_area(area);
     }
+
+    destroy_translation_map(space->translation_map);
 }
 
 struct vm_area *create_area(struct vm_address_space *space, unsigned int address,
@@ -93,11 +96,10 @@ struct vm_area *create_area(struct vm_address_space *space, unsigned int address
 {
     struct vm_area *area;
     unsigned int fault_addr;
-    int old_flags;
 
     // Anonymous area, create a cache if non is specified.
     if (cache == 0)
-        cache = create_vm_cache();
+        cache = create_vm_cache(0);
 
     rwlock_lock_write(&space->mut);
     area = create_vm_area(&space->area_map, address, size, place, name, flags);
@@ -109,14 +111,63 @@ struct vm_area *create_area(struct vm_address_space *space, unsigned int address
 
     area->cache = cache;
     area->cache_offset = cache_offset;
+    area->cache_length = size;
     if (flags & AREA_WIRED)
     {
         for (fault_addr = area->low_address; fault_addr < area->high_address;
                 fault_addr += PAGE_SIZE)
         {
-            if (!soft_fault(space, area, fault_addr))
+            if (!soft_fault(space, area, fault_addr, 1))
                 panic("create_area: soft fault failed");
         }
+    }
+
+error1:
+    rwlock_unlock_write(&space->mut);
+
+    return area;
+}
+
+// This area is wired by default and does not take page faults.
+struct vm_area *map_contiguous_memory(struct vm_address_space *space, unsigned int address,
+                                      unsigned int size, enum placement place,
+                                      const char *name, unsigned int area_flags,
+                                      unsigned int phys_addr)
+{
+    struct vm_area *area;
+    unsigned int page_flags;
+    unsigned int offset;
+
+    area_flags |= AREA_WIRED;
+
+    rwlock_lock_write(&space->mut);
+    area = create_vm_area(&space->area_map, address, size, place, name, area_flags);
+    if (area == 0)
+    {
+        kprintf("create area failed\n");
+        goto error1;
+    }
+
+    area->cache = 0;
+
+    page_flags = PAGE_PRESENT;
+
+    // If the page is clean, we will mark it not writable. This will fault
+    // on the next write, allowing us to update the dirty flag.
+    if ((area_flags & AREA_WRITABLE) != 0)
+        page_flags |= PAGE_WRITABLE;
+
+    if (area->flags & AREA_EXECUTABLE)
+        page_flags |= PAGE_EXECUTABLE;
+
+    if (space == &kernel_address_space)
+        page_flags |= PAGE_SUPERVISOR | PAGE_GLOBAL;
+
+    // Map the pages
+    for (offset = 0; offset < size; offset += PAGE_SIZE)
+    {
+        vm_map_page(space->translation_map, area->low_address + offset,
+                    (phys_addr + offset) | page_flags);
     }
 
 error1:
@@ -128,22 +179,34 @@ error1:
 void destroy_area(struct vm_address_space *space, struct vm_area *area)
 {
     struct vm_cache *cache;
+    unsigned int va;
+    unsigned int ptentry;
+
     rwlock_lock_write(&space->mut);
     cache = area->cache;
 
-    // XXX Unmap all pages in this area
+    // Unmap all pages in this area
+    for (va = area->low_address; va < area->high_address; va += PAGE_SIZE)
+    {
+        ptentry = query_translation_map(space->translation_map, va);
+        if ((ptentry & PAGE_PRESENT) != 0)
+        {
+            VM_DEBUG("destroy_area: decrementing page ref for va %08x pa %08x\n",
+                    va, PAGE_ALIGN(ptentry));
+            dec_page_ref(pa_to_page(ptentry));
+        }
+    }
 
-    destroy_vm_area(&space->area_map, area);
+    destroy_vm_area(area);
     rwlock_unlock_write(&space->mut);
 
     dec_cache_ref(cache);
 }
 
-int handle_page_fault(unsigned int address)
+int handle_page_fault(unsigned int address, int is_store)
 {
     struct vm_address_space *space = current_thread()->proc->space;
     const struct vm_area *area;
-    int old_flags;
     int result = 0;
 
     rwlock_lock_read(&space->mut);
@@ -160,7 +223,7 @@ int handle_page_fault(unsigned int address)
         goto error1;
     }
 
-    result = soft_fault(space, area, address);
+    result = soft_fault(space, area, address, is_store);
 
 error1:
     rwlock_unlock_read(&space->mut);
@@ -169,68 +232,170 @@ error1:
 }
 
 //
-// This is always called with the address space lock held, so the
-// area is guaranteed not to change.
+// This is always called with the address space lock held, so the area is
+// guaranteed not to change. Returns 1 if it sucessfully satisfied the fault, 0
+// if it failed for some reason.
 //
 static int soft_fault(struct vm_address_space *space, const struct vm_area *area,
-                      unsigned int address)
+                      unsigned int address, int is_store)
 {
     int got;
-    int page_flags;
-    struct vm_page *page;
-    unsigned int pa;
+    unsigned int page_flags;
+    struct vm_page *source_page;
+    struct vm_page *dummy_page = 0;
     unsigned int cache_offset;
-    struct vm_cache *cache = area->cache;
+    struct vm_cache *cache;
     int old_flags;
+    int is_cow_page = 0;
+    int size_to_read;
+
+    VM_DEBUG("soft fault va %08x %s\n", address, is_store ? "store" : "load");
+
+    // XXX check area protections and fail if this shouldn't be allowed
+    if (is_store && (area->flags & AREA_WRITABLE) == 0)
+    {
+        kprintf("store to read only area %s @%08x\n", area->name, address);
+        return 0;
+    }
 
     cache_offset = PAGE_ALIGN(address - area->low_address + area->cache_offset);
     old_flags = disable_interrupts();
     lock_vm_cache();
-    page = lookup_cache_page(cache, cache_offset);
-    if (page == 0)
+    assert(area->cache);
+
+    for (cache = area->cache; cache; cache = cache->source)
     {
-        pa = vm_allocate_page();
-        page = page_for_address(pa);
+        VM_DEBUG("searching in cache %p\n", cache);
+        source_page = lookup_cache_page(cache, cache_offset);
+        if (source_page)
+            break;
 
-        // Insert the page first so, if a collided fault occurs, it will not
-        // load a different page (the vm cache lock protects the busy bit)
-        page->busy = 1;
-        insert_cache_page(cache, cache_offset, page);
-
-        if (cache->file)
+        if (cache->file && address - area->low_address < area->cache_length)
         {
+            VM_DEBUG("reading page from file\n");
+
+            // Read the page from this cache.
+            source_page = vm_allocate_page();
+
+            // Insert the page first so, if a collided fault occurs, it will not
+            // load a different page (the vm cache lock protects the busy bit)
+            source_page->busy = 1;
+            insert_cache_page(cache, cache_offset, source_page);
             unlock_vm_cache();
             restore_interrupts(old_flags);
-            got = read_file(cache->file, cache_offset, (void*) PA_TO_VA(pa),
-                            PAGE_SIZE);
+
+            if (area->cache_length - cache_offset < PAGE_SIZE)
+                size_to_read = area->cache_length - cache_offset;
+            else
+                size_to_read = PAGE_SIZE;
+
+            got = read_file(cache->file, cache_offset,
+                            (void*) PA_TO_VA(page_to_pa(source_page)), size_to_read);
             if (got < 0)
             {
                 kprintf("failed to read from file\n");
-
-                // XXX kill process?
+                dec_page_ref(source_page);
+                if (dummy_page != 0)
+                {
+                    disable_interrupts();
+                    lock_vm_cache();
+                    remove_cache_page(dummy_page);
+                    unlock_vm_cache();
+                    restore_interrupts(old_flags);
+                    dec_page_ref(dummy_page);
+                }
 
                 return 0;
             }
 
+            // For BSS, clear out data past the end of the file
+            if (size_to_read < PAGE_SIZE)
+            {
+                memset((char*) PA_TO_VA(page_to_pa(source_page)) + size_to_read, 0,
+                       PAGE_SIZE - size_to_read);
+            }
+
             disable_interrupts();
             lock_vm_cache();
+            source_page->busy = 0;
+            break;
         }
 
-        page->busy = 0;
+        // Otherwise scan the next cache
+        is_cow_page = 1;
+
+        if (cache == area->cache)
+        {
+            // Insert a dummy page in the top level cache to catch collided faults.
+            dummy_page = vm_allocate_page();
+            dummy_page->busy = 1;
+            insert_cache_page(cache, cache_offset, dummy_page);
+        }
     }
+
+    if (source_page == 0)
+    {
+        assert(dummy_page != 0);
+
+        VM_DEBUG("source page was not found, use empty page\n");
+
+        // No page found, just use the dummy page
+        dummy_page->busy = 0;
+        source_page = dummy_page;
+    }
+    else if (is_cow_page)
+    {
+        // is_cow_page means source_page belongs to another cache.
+        assert(dummy_page != 0);
+        if (is_store)
+        {
+            // The dummy page have the contents of the source page copied into it,
+            // and will be inserted into the top cache (it's not really a dummy page
+            // any more).
+            memcpy((void*) PA_TO_VA(page_to_pa(dummy_page)),
+                (void*) PA_TO_VA(page_to_pa(source_page)),
+                PAGE_SIZE);
+            VM_DEBUG("write copy page va %08x dest pa %08x source pa %08x\n",
+                address, page_to_pa(dummy_page), page_to_pa(source_page));
+            source_page = dummy_page;
+            dummy_page->busy = 0;
+        }
+        else
+        {
+            // We will map in the read-only page from the source cache.
+            // Remove the dummy page from this cache (we do not insert
+            // the page into this cache, because we don't own it page).
+            remove_cache_page(dummy_page);
+            dec_page_ref(dummy_page);
+
+            VM_DEBUG("mapping read-only source page va %08x pa %08x\n", address,
+                page_to_pa(source_page));
+        }
+    }
+
+    assert(source_page != 0);
+
+    // Grab a ref because we are going to map this page
+    inc_page_ref(source_page);
 
     unlock_vm_cache();
     restore_interrupts(old_flags);
 
-    // XXX busy way for page to finish loading
-    while (page->busy)
+    // XXX busy wait for page to finish loading
+    while (source_page->busy)
         reschedule();
+
+    if (is_store)
+        source_page->dirty = 1; // XXX Locking?
 
     // It's possible two threads will fault on the same VA and end up mapping
     // the page twice. This is fine, because the code above ensures it will
     // be the same page.
     page_flags = PAGE_PRESENT;
-    if (area->flags & AREA_WRITABLE)
+
+    // If the page is clean, we will mark it not writable. This will fault
+    // on the next write, allowing us to update the dirty flag.
+    if ((area->flags & AREA_WRITABLE) != 0 && (source_page->dirty || is_store))
         page_flags |= PAGE_WRITABLE;
 
     if (area->flags & AREA_EXECUTABLE)
@@ -239,7 +404,7 @@ static int soft_fault(struct vm_address_space *space, const struct vm_area *area
     if (space == &kernel_address_space)
         page_flags |= PAGE_SUPERVISOR | PAGE_GLOBAL;
 
-    vm_map_page(space->translation_map, address, address_for_page(page)
+    vm_map_page(space->translation_map, address, page_to_pa(source_page)
         | page_flags);
 
     return 1;

@@ -21,6 +21,7 @@
 
 #include <math.h>
 #include <Matrix.h>
+#include <nyuzi.h>
 #include <RenderContext.h>
 #include <RenderTarget.h>
 #include <schedule.h>
@@ -39,16 +40,17 @@ const int kFbHeight = 480;
 // All threads start execution here.
 int main()
 {
-    if (__builtin_nyuzi_read_control_reg(0) == 0)
-        initVGA(VGA_MODE_640x480);
-    else
-        workerThread();
+    void *frameBuffer;
+    if (get_current_thread_id() != 0)
+        worker_thread();
 
-    startAllThreads();
+    frameBuffer = init_vga(VGA_MODE_640x480);
+
+    start_all_threads();
 
     RenderContext *context = new RenderContext();
     RenderTarget *renderTarget = new RenderTarget();
-    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, (void*) 0x200000);
+    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, frameBuffer);
     Surface *depthBuffer = new Surface(kFbWidth, kFbHeight);
     renderTarget->setColorBuffer(colorBuffer);
     renderTarget->setDepthBuffer(depthBuffer);
