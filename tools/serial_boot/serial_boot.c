@@ -302,7 +302,6 @@ int pingTarget(int serialFd)
             targetReady = 1;
             break;
         }
-	printf(" Got 0x%02x\n", ch);
     }
 
     if (!targetReady)
