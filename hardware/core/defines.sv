@@ -94,6 +94,8 @@ typedef enum logic[3:0] {
     MEM_CONTROL_REG         = 4'b0110,  // Control register
     MEM_BLOCK               = 4'b0111,  // Vector block
     MEM_BLOCK_M             = 4'b1000,
+    MEM_UNLOCK              = 4'b1010,  // Unlock associated cache line
+    MEM_LOCK                = 4'b1011,  // Lock associated cache line
     MEM_SCGATH              = 4'b1101,  // Vector scatter/gather
     MEM_SCGATH_M            = 4'b1110
 } memory_op_t;
@@ -306,14 +308,16 @@ typedef enum logic {
 typedef logic[3:0] core_id_t;
 typedef logic[$clog2(`THREADS_PER_CORE) - 1:0] l1_miss_entry_idx_t;
 
-typedef enum logic[2:0] {
+typedef enum logic[3:0] {
     L2REQ_LOAD,
     L2REQ_LOAD_SYNC,
     L2REQ_STORE,
     L2REQ_STORE_SYNC,
     L2REQ_FLUSH,
     L2REQ_IINVALIDATE,
-    L2REQ_DINVALIDATE
+    L2REQ_DINVALIDATE,
+    L2REQ_LOCK,
+    L2REQ_UNLOCK
 } l2req_packet_type_t;
 
 typedef struct packed {
@@ -331,7 +335,9 @@ typedef enum logic[2:0] {
     L2RSP_STORE_ACK,
     L2RSP_FLUSH_ACK,
     L2RSP_IINVALIDATE_ACK,
-    L2RSP_DINVALIDATE_ACK
+    L2RSP_DINVALIDATE_ACK,
+    L2RSP_LOCK_ACK,
+    L2RSP_UNLOCK_ACK
 } l2rsp_packet_type_t;
 
 typedef struct packed {
