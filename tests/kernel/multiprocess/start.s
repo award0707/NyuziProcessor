@@ -1,5 +1,5 @@
 //
-// Copyright 2011-2015 Jeff Bush
+// Copyright 2016 Jeff Bush
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,19 +14,11 @@
 // limitations under the License.
 //
 
+                .globl _start
+_start:         call main
+1:              goto 1b
 
-#pragma once
 
-typedef int veci16_t __attribute__((ext_vector_type(16)));
-typedef unsigned int vecu16_t __attribute__((ext_vector_type(16)));
-typedef float vecf16_t __attribute__((ext_vector_type(16)));
-
-typedef char int8_t;
-typedef unsigned char uint8_t;
-typedef short int16_t;
-typedef unsigned short uint16_t;
-typedef int int32_t;
-typedef unsigned int uint32_t;
-typedef long long int int64_t;
-typedef unsigned long long int uint64_t;
-typedef unsigned int intptr_t;
+                .globl __syscall
+__syscall:      syscall
+                ret

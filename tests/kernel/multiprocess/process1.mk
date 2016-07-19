@@ -1,5 +1,5 @@
 #
-# Copyright 2011-2015 Jeff Bush
+# Copyright 2016 Jeff Bush
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,28 +14,19 @@
 # limitations under the License.
 #
 
-TOPDIR=../../../
+TOPDIR=../../..
 
 include $(TOPDIR)/build/target.mk
 
-LIBS=-lc -los-bare
-SRCS=hash.cpp
+SRCS=process1.c start.s
 
-OBJS=$(CRT0_BARE) $(SRCS_TO_OBJS)
+OBJS=$(SRCS_TO_OBJS)
 DEPS=$(SRCS_TO_DEPS)
 
-$(OBJ_DIR)/hash.hex: $(OBJS)
-	$(LD) -o $(OBJ_DIR)/hash.elf $(LDFLAGS) $(OBJS) $(LIBS) $(LDFLAGS)
-	$(ELF2HEX) -o $(OBJ_DIR)/hash.hex $(OBJ_DIR)/hash.elf
-
-run: $(OBJ_DIR)/hash.hex
-	$(EMULATOR) $(OBJ_DIR)/hash.hex
-
-verirun: $(OBJ_DIR)/hash.hex
-	$(VERILATOR) +bin=$(OBJ_DIR)/hash.hex
+program.elf: $(OBJS)
+	$(LD) -o program.elf -Ttext=0x1000 $(OBJS)
 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -f program.elf
 
 -include $(DEPS)
-

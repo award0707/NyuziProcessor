@@ -14,28 +14,35 @@
 # limitations under the License.
 #
 
-TOPDIR=../../../
+TOPDIR=../../..
 
 include $(TOPDIR)/build/target.mk
 
-LIBS=-lc -los-bare
-SRCS=hash.cpp
+#
+# To run, this uses the kernel built in software/kernel.
+# The compiled hello program is bundled into the filesystem
+# and loaded by the kernel.
+#
+run: program.elf fsimage.bin
+	$(EMULATOR) -b fsimage.bin $(TOPDIR)/software/kernel/kernel.hex
 
-OBJS=$(CRT0_BARE) $(SRCS_TO_OBJS)
-DEPS=$(SRCS_TO_DEPS)
+verirun: program.elf fsimage.bin
+	$(VERILATOR) +bin=$(TOPDIR)/software/kernel/kernel.hex +block=fsimage.bin
 
-$(OBJ_DIR)/hash.hex: $(OBJS)
-	$(LD) -o $(OBJ_DIR)/hash.elf $(LDFLAGS) $(OBJS) $(LIBS) $(LDFLAGS)
-	$(ELF2HEX) -o $(OBJ_DIR)/hash.hex $(OBJ_DIR)/hash.elf
+program.elf: FORCE
+	make -f process1.mk
 
-run: $(OBJ_DIR)/hash.hex
-	$(EMULATOR) $(OBJ_DIR)/hash.hex
+program2.elf: FORCE
+	make -f process2.mk
 
-verirun: $(OBJ_DIR)/hash.hex
-	$(VERILATOR) +bin=$(OBJ_DIR)/hash.hex
+fsimage.bin: program.elf program2.elf
+	$(MKFS) fsimage.bin program.elf program2.elf
 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -f program.elf fsimage.bin
+	make -f process1.mk
+	make -f process2.mk
+
+FORCE:
 
 -include $(DEPS)
-

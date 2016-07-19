@@ -1,5 +1,5 @@
 //
-// Copyright 2011-2015 Jeff Bush
+// Copyright 2016 Jeff Bush
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,19 +14,24 @@
 // limitations under the License.
 //
 
+extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
 
-#pragma once
+void exec(const char *path)
+{
+    __syscall(3, (int) path, 0, 0, 0, 0);
+}
 
-typedef int veci16_t __attribute__((ext_vector_type(16)));
-typedef unsigned int vecu16_t __attribute__((ext_vector_type(16)));
-typedef float vecf16_t __attribute__((ext_vector_type(16)));
+void printstr(const char *str, int length)
+{
+    __syscall(0, (int) str, length, 0, 0, 0);
+}
 
-typedef char int8_t;
-typedef unsigned char uint8_t;
-typedef short int16_t;
-typedef unsigned short uint16_t;
-typedef int int32_t;
-typedef unsigned int uint32_t;
-typedef long long int int64_t;
-typedef unsigned long long int uint64_t;
-typedef unsigned int intptr_t;
+int main()
+{
+    exec("program2.elf");
+
+    // XXX do work. Need to touch more heap data and make function calls so
+    // the stack is accessed.
+    while (1)
+        printstr("A", 1);
+}
