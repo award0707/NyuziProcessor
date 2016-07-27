@@ -1,5 +1,5 @@
 #
-# Copyright 2011-2015 Jeff Bush
+# Copyright 2016 Jeff Bush
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,29 +18,16 @@ TOPDIR=../../..
 
 include $(TOPDIR)/build/target.mk
 
-SRCS=goodbye_world.c start.s
+LIBS=-lc
+SRCS=init.c
 
 OBJS=$(SRCS_TO_OBJS)
 DEPS=$(SRCS_TO_DEPS)
 
 program.elf: $(OBJS)
-	$(LD) -o program.elf -Ttext=0x1000 $(OBJS)
-
-#
-# To run, this uses the kernel built in software/kernel.
-# The compiled hello program is bundled into the filesystem
-# and loaded by the kernel.
-#
-run: program.elf fsimage.bin
-	$(EMULATOR) -b fsimage.bin $(TOPDIR)/software/kernel/kernel.hex
-
-verirun: program.elf fsimage.bin
-	$(VERILATOR) +bin=$(TOPDIR)/software/kernel/kernel.hex +block=fsimage.bin
-
-fsimage.bin: program.elf
-	$(MKFS) fsimage.bin program.elf
+	$(LD) -o program.elf -Ttext=0x1000 $(LDFLAGS) $(CRT0_KERN) $(OBJS) $(LIBS) -los-kern $(LDFLAGS)
 
 clean:
-	rm -f program.elf fsimage.bin
+	rm -f program.elf
 
 -include $(DEPS)

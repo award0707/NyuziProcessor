@@ -14,6 +14,14 @@
 // limitations under the License.
 //
 
+#include <nyuzi.h>
+#include <stdio.h>
+
+//
+// Pass an invalid user buffer to a syscall. Ensure this returns an error
+// rather than crashing the kernel.
+//
+
 extern int __syscall(int n, int arg0, int arg1, int arg2, int arg3, int arg4);
 
 int printstr(const char *str, int length)
@@ -23,8 +31,15 @@ int printstr(const char *str, int length)
 
 int main()
 {
+    int retval;
+    void *ptr;
+
     // The parameter to the first syscall is a null pointer, which will fail and
-    // return an error. Then the second string "FAULT" will be printed.
-    if (printstr((char*) 0, 5) < 0)
-        printstr("FAULT\n", 6);
+    // return an error. This should print a negative number.
+    retval = printstr((char*) 0, 5);
+    printf("printstr returned %d\n", retval);
+
+    // The name is invalid and will fail to copy. Ensure it returns 0.
+    ptr = create_area(0, 0x1000, AREA_PLACE_SEARCH_UP, (char*) 1, AREA_WRITABLE);
+    printf("create area returned %d\n", ptr);
 }

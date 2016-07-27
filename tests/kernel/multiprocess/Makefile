@@ -18,6 +18,9 @@ TOPDIR=../../..
 
 include $(TOPDIR)/build/target.mk
 
+fsimage.bin: program.elf program2.elf
+	$(MKFS) fsimage.bin program.elf memtest.elf
+
 #
 # To run, this uses the kernel built in software/kernel.
 # The compiled hello program is bundled into the filesystem
@@ -30,18 +33,16 @@ verirun: program.elf fsimage.bin
 	$(VERILATOR) +bin=$(TOPDIR)/software/kernel/kernel.hex +block=fsimage.bin
 
 program.elf: FORCE
-	make -f process1.mk
+	make -f init.mk
 
 program2.elf: FORCE
-	make -f process2.mk
-
-fsimage.bin: program.elf program2.elf
-	$(MKFS) fsimage.bin program.elf program2.elf
+	make -f memtest.mk
 
 clean:
+	make clean -f init.mk
+	make clean -f memtest.mk
+	rm -rf obj
 	rm -f program.elf fsimage.bin
-	make -f process1.mk
-	make -f process2.mk
 
 FORCE:
 

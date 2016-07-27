@@ -14,11 +14,15 @@
 // limitations under the License.
 //
 
-                .globl _start
-_start:         call main
-1:              goto 1b
+#include <nyuzi.h>
 
+// Launch multiple instances of the memory tester in parallel. On success, this
+// should print "+++++"
 
-                .globl __syscall
-__syscall:      syscall
-                ret
+int main()
+{
+    int i;
+
+    for (i = 0; i < 5; i++)
+        exec("memtest.elf");
+}

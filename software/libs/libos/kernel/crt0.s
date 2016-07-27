@@ -16,8 +16,7 @@
 
                 .globl _start
 _start:         call main
-1:              goto 1b
-
+                call exit
 
                 .globl __other_thread_start
 __other_thread_start:
