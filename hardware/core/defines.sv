@@ -94,8 +94,6 @@ typedef enum logic[3:0] {
     MEM_CONTROL_REG         = 4'b0110,  // Control register
     MEM_BLOCK               = 4'b0111,  // Vector block
     MEM_BLOCK_M             = 4'b1000,
-    MEM_UNLOCK              = 4'b1010,  // Unlock associated cache line
-    MEM_LOCK                = 4'b1011,  // Lock associated cache line
     MEM_SCGATH              = 4'b1101,  // Vector scatter/gather
     MEM_SCGATH_M            = 4'b1110
 } memory_op_t;
@@ -110,6 +108,11 @@ typedef enum logic[2:0] {
     CACHE_TLB_INVAL_ALL     = 3'b110,
     CACHE_ITLB_INSERT       = 3'b111
 } cache_op_t;
+
+typedef enum logic {
+    CACHE_UNLOCK            = 1'b0,
+    CACHE_LOCK              = 1'b1
+} cache_ext_op_t;
 
 typedef enum logic[2:0] {
     BRANCH_ALL              = 3'b000,
@@ -227,6 +230,8 @@ typedef struct packed {
     control_register_t creg_index;
     logic is_cache_control;
     cache_op_t cache_control_op;
+    logic is_cache_control_ext;
+    cache_ext_op_t cache_control_ext_op;
 } decoded_instruction_t;
 
 `define IEEE754_B32_EXP_WIDTH 8

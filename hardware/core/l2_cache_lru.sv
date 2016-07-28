@@ -53,8 +53,9 @@ module l2_cache_lru
     input [SET_INDEX_WIDTH - 1:0]         fill_set,
     output logic [WAY_INDEX_WIDTH - 1:0]  fill_way,
 
-    // Lock interface. Used to lock a way in the set.
-
+    // Lock interface. Sets the lock bit for way being accessed or filled. 
+    input                                 lock_en,
+    input                                 lock_value,
 
     // Access interface. Used to set MRU bits when a way is accessed.
     input                                 access_en,
@@ -74,14 +75,21 @@ module l2_cache_lru
     logic was_fill;
     logic [WAY_INDEX_WIDTH - 1:0] new_mru;
     logic [MRU_BITS - 1:0] new_mru_oh;
+    logic [NUM_WAYS - 1:0] lock_bits;           // lock bits mask
+    logic [NUM_WAYS - 1:0] update_lock_bits;
+    logic [WAY_INDEX_WIDTH - 1:0] lock_way;
+    logic update_lock_en;
+    logic [NUM_WAYS - 1:0] lock_update_oh;
 `ifdef SIMULATION
     logic was_access;
 `endif
 
-    assign read_en = access_en || fill_en;
+    assign read_en = access_en || fill_en || lock_en;
     assign read_set = fill_en ? fill_set : access_set;
     assign new_mru = was_fill ? fill_way : access_update_way;
     assign update_lru_en = was_fill || access_update_en;
+    assign update_lock_en = lock_en;
+    assign lock_way = was_fill ? fill_way : access_update_way;
 
     sram_1r1w #(
         .DATA_WIDTH(MRU_BITS),
@@ -99,20 +107,52 @@ module l2_cache_lru
         .write_data(update_mru_bits),
         .*);
 
+    sram_1r1w #(
+        .DATA_WIDTH(NUM_WAYS),
+        .SIZE(NUM_SETS),
+        .READ_DURING_WRITE("NEW_DATA")
+    ) lock_data(
+        .read_en(read_en),
+        .read_addr(read_set),
+        .read_data(lock_bits),
+
+        .write_en(update_lock_en),
+        .write_addr(update_set),
+        .write_data(update_lock_bits),
+        .*);
+
     idx_to_oh #(.NUM_SIGNALS(MRU_BITS)) idx_to_oh_new_mru(
         .one_hot(new_mru_oh),
         .index(new_mru));
 
-    /*
-        PLRUm algorithm.  Each way has a bit which is 0 by default.
-        That bit is set to 1 when the way is accessed.
+    idx_to_oh #(.NUM_SIGNALS(NUM_WAYS)) idx_to_oh_lock_update(
+        .one_hot(lock_update_oh),
+        .index(lock_way));
 
-        If setting a MRU bit will result in all MRU bits being 1, reset
-        all the other MRU bits to 0.
+    //
+    // if lock_en is asserted:
+    // if lock_value is 1, set the locking bit of the desired way.
+    // if it's 0, clear that bit instead (unlock).
+    //
+    always_comb begin
+        if (lock_en)
+            update_lock_bits = lock_value ?
+                               (lock_bits | lock_update_oh) :
+                               (lock_bits & ~lock_update_oh);
+        else
+            update_lock_bits = lock_bits;
+    end
 
-        If evicting a line, choose the first way with a MRU bit that is 0.
-        Then set that way's MRU flag.
-    */
+    //
+    //  PLRUm algorithm.  Each way has a "MRU" bit which is 0 by default.
+    //  That bit is set to 1 when the way is accessed.
+    //
+    //  If setting a MRU bit will result in all MRU bits being 1, reset
+    //  all to 0 except for the new MRU.
+    //
+    //  If evicting a line, choose the first way with a MRU bit that is 0,
+    //  then set that way's MRU flag.
+    //
 
     generate
         case (NUM_WAYS)
@@ -126,7 +166,7 @@ module l2_cache_lru
             begin
                 always_comb
                 begin
-                    casez (mru_bits)
+                    casez (mru_bits | lock_bits)
                             2'b?0: fill_way = 0;
                             2'b01: fill_way = 1;
                             default: fill_way = '0;
@@ -141,7 +181,7 @@ module l2_cache_lru
             begin
                 always_comb
                 begin
-                    casez (mru_bits)
+                    casez (mru_bits | lock_bits)
                             4'b???0: fill_way = 0;
                             4'b??01: fill_way = 1;
                             4'b?011: fill_way = 2; 
@@ -157,7 +197,7 @@ module l2_cache_lru
             begin
                 always_comb
                 begin
-                    casez (mru_bits)
+                    casez (mru_bits | lock_bits)
                             8'b???????0: fill_way = 0;
                             8'b??????01: fill_way = 1;
                             8'b?????011: fill_way = 2; 

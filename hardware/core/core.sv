@@ -56,6 +56,8 @@ module core
     scalar_t cr_trap_handler;
     scalar_t cr_tlb_miss_handler;
     subcycle_t cr_eret_subcycle[`THREADS_PER_CORE];
+    logic dd_lock_en;
+    logic dd_unlock_en;
 
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)

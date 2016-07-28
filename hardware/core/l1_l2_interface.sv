@@ -115,6 +115,8 @@ module l1_l2_interface
     input                                         dd_membar_en,
     input                                         dd_iinvalidate_en,
     input                                         dd_dinvalidate_en,
+    input                                         dd_lock_en,
+    input                                         dd_unlock_en,
     input [`CACHE_LINE_BYTES - 1:0]               dd_store_mask,
     input cache_line_index_t                      dd_store_addr,
     input cache_line_data_t                       dd_store_data,
@@ -166,6 +168,8 @@ module l1_l2_interface
     logic response_is_iinvalidate;
     logic response_is_dinvalidate;
 
+    logic               sq_dequeue_lock;
+    logic               sq_dequeue_unlock;
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
     cache_line_index_t  sq_dequeue_addr;        // From l1_store_queue of l1_store_queue.v
@@ -334,7 +338,9 @@ module l1_l2_interface
         && (response_stage2.packet_type == L2RSP_STORE_ACK
         || response_stage2.packet_type == L2RSP_FLUSH_ACK
         || response_stage2.packet_type == L2RSP_IINVALIDATE_ACK
-        || response_stage2.packet_type == L2RSP_DINVALIDATE_ACK);
+        || response_stage2.packet_type == L2RSP_DINVALIDATE_ACK
+        || response_stage2.packet_type == L2RSP_LOCK_ACK
+        || response_stage2.packet_type == L2RSP_UNLOCK_ACK);
     assign dcache_l2_response_idx = response_stage2.id;
     assign icache_l2_response_idx = response_stage2.id;
     assign storebuf_l2_response_idx = response_stage2.id;
@@ -372,7 +378,7 @@ module l1_l2_interface
 
             // Ensure only one dequeue type is set
             assert(!sq_dequeue_ready || $onehot0({sq_dequeue_flush, sq_dequeue_iinvalidate,
-                sq_dequeue_dinvalidate}));
+                sq_dequeue_dinvalidate, sq_dequeue_lock, sq_dequeue_unlock}));
 
             // These are latched to delay then one cycle from the tag updates
             // Update cache line for data cache
@@ -429,6 +435,10 @@ module l1_l2_interface
                 l2i_request.packet_type = L2REQ_IINVALIDATE;
             else if (sq_dequeue_dinvalidate)
                 l2i_request.packet_type = L2REQ_DINVALIDATE;
+            else if (sq_dequeue_lock)
+                l2i_request.packet_type = L2REQ_LOCK;
+            else if (sq_dequeue_unlock)
+                l2i_request.packet_type = L2REQ_UNLOCK;
             else
                 l2i_request.packet_type = L2REQ_STORE;
 

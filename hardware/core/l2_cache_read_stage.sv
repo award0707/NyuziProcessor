@@ -60,6 +60,8 @@ module l2_cache_read_stage(
     output l2_tag_t                           l2r_update_tag_value,
     output logic                              l2r_update_lru_en,
     output l2_way_idx_t                       l2r_update_lru_hit_way,
+    output logic                              l2r_lock_en,
+    output logic                              l2r_lock_value,
 
     // From l2_cache_update_stage
     input                                     l2u_write_en,
@@ -99,6 +101,8 @@ module l2_cache_read_stage(
     logic[$clog2(`L2_WAYS * `L2_SETS) - 1:0] read_address;
     logic is_load;
     logic is_store;
+    logic is_lock;
+    logic is_unlock;
     logic update_dirty;
     logic update_tag;
     logic is_flush_first_pass;
@@ -115,6 +119,8 @@ module l2_cache_read_stage(
     assign writeback_way = l2t_request.packet_type == L2REQ_FLUSH
         ? hit_way_idx : l2t_fill_way;
     assign is_dinvalidate = l2t_request.packet_type == L2REQ_DINVALIDATE;
+    assign is_lock = l2t_request.packet_type == L2REQ_LOCK;
+    assign is_unlock = l2t_request.packet_type == L2REQ_UNLOCK;
 
     //
     // Check for cache hit
@@ -196,8 +202,17 @@ module l2_cache_read_stage(
     //
     // Update LRU
     //
-    assign l2r_update_lru_en = cache_hit && (is_load || is_store);
+    assign l2r_update_lru_en = cache_hit && (is_load || is_store || is_lock);
     assign l2r_update_lru_hit_way = hit_way_idx;
+
+    //
+    // Lock bit controls
+    // They will be propagated to the L2 LRU module to determine whether the
+    // currently accessed line should be locked / unlocked.
+    // Lock_value is 1 if locking, 0 otherwise
+    //
+    assign l2r_lock_en = cache_hit && (is_lock || is_unlock);
+    assign l2r_lock_value = is_lock;
 
     //
     // Synchronized requests

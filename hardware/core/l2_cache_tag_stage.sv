@@ -43,6 +43,8 @@ module l2_cache_tag_stage(
     input l2_tag_t                        l2r_update_tag_value,
     input                                 l2r_update_lru_en,
     input l2_way_idx_t                    l2r_update_lru_hit_way,
+    input                                 l2r_lock_en,
+    input                                 l2r_lock_value,
 
     // To l2_cache_read_stage
     output logic                          l2t_request_valid,
@@ -55,10 +57,12 @@ module l2_cache_tag_stage(
     output cache_line_data_t              l2t_data_from_memory,
     output logic                          l2t_is_restarted_flush);
 
-    cache_lru #(.NUM_SETS(`L2_SETS), .NUM_WAYS(`L2_WAYS)) cache_lru(
+    l2_cache_lru #(.NUM_SETS(`L2_SETS), .NUM_WAYS(`L2_WAYS)) l2_cache_lru(
         .fill_en(l2a_is_l2_fill),
         .fill_set(l2a_request.address.set_idx),
         .fill_way(l2t_fill_way),    // Output to next stage
+        .lock_en(l2r_lock_en),
+        .lock_value(l2r_lock_value),
         .access_en(l2a_request_valid),
         .access_set(l2a_request.address.set_idx),
         .access_update_en(l2r_update_lru_en),

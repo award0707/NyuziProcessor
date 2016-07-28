@@ -102,6 +102,8 @@ module dcache_data_stage(
     output logic                              dd_membar_en,
     output logic                              dd_iinvalidate_en,
     output logic                              dd_dinvalidate_en,
+    output logic                              dd_lock_en,
+    output logic                              dd_unlock_en,
     output [`CACHE_LINE_BYTES - 1:0]          dd_store_mask,
     output cache_line_index_t                 dd_store_addr,
     output cache_line_data_t                  dd_store_data,
@@ -153,6 +155,7 @@ module dcache_data_stage(
     logic tlb_miss;
     logic page_fault;
     logic is_store_fault;
+    logic cache_control_ext_en;
 
     // Unlike earlier stages, this commits instruction side effects like stores,
     // so it needs to check if there is a rollback (which would be for the
@@ -251,6 +254,15 @@ module dcache_data_stage(
             || dt_instruction.cache_control_op == CACHE_ITLB_INSERT
             || dt_instruction.cache_control_op == CACHE_TLB_INVAL
             || dt_instruction.cache_control_op == CACHE_TLB_INVAL_ALL);
+
+    // Extended cache control (lock, unlock)
+    assign cache_control_ext_en = dt_instruction_valid
+        && !rollback_this_stage
+        && dt_instruction.is_cache_control_ext;
+    assign dd_lock_en = cache_control_ext_en
+        && dt_instruction.cache_control_ext_op == CACHE_LOCK;
+    assign dd_unlock_en = cache_control_ext_en
+        && dt_instruction.cache_control_ext_op == CACHE_UNLOCK;
 
     // Control register access
     assign creg_access_en = dt_instruction_valid
@@ -537,8 +549,8 @@ module dcache_data_stage(
 
             // Make sure this decodes only one type of instruction
             assert($onehot0({dcache_load_en, dcache_store_en, dd_io_write_en, dd_io_read_en,
-                dd_flush_en, dd_iinvalidate_en, dd_dinvalidate_en, dd_membar_en,
-                dd_creg_write_en, dd_creg_read_en}));
+                dd_flush_en, dd_iinvalidate_en, dd_dinvalidate_en, dd_membar_en, dd_lock_en,
+                dd_unlock_en, dd_creg_write_en, dd_creg_read_en}));
 
             dd_instruction_valid <= dt_instruction_valid && !rollback_this_stage;
 
