@@ -92,7 +92,7 @@ module l2_cache_lru
     assign read_set = fill_en ? fill_set : access_set;
     assign new_mru = was_fill ? fill_way : access_update_way;
     assign update_lru_en = was_fill || access_update_en;
-    assign update_lock_en = was_fill;
+    assign update_lock_en = was_lock;
     assign lock_way = was_fill ? fill_way : access_update_way;
 
     sram_1r1w #(
@@ -176,7 +176,8 @@ module l2_cache_lru
                             default: fill_way = '0;
                     endcase
                     if(&(mru_bits | new_mru_oh | lock_bits))
-                        update_mru_bits = new_mru_oh;
+                        update_mru_bits = &(new_mru_oh | lock_bits) ?
+                                            '0 : new_mru_oh;
                     else
                         update_mru_bits = new_mru_oh | mru_bits;
                 end
@@ -195,7 +196,8 @@ module l2_cache_lru
                             default: fill_way = '0;
                     endcase
                     if(&(mru_bits | new_mru_oh | lock_bits))
-                        update_mru_bits = new_mru_oh;
+                        update_mru_bits = &(new_mru_oh | lock_bits) ?
+                                            '0 : new_mru_oh;
                     else
                         update_mru_bits = new_mru_oh | mru_bits;
                 end
@@ -217,7 +219,8 @@ module l2_cache_lru
                             default: fill_way = '0;
                     endcase
                     if(&(mru_bits | new_mru_oh | lock_bits))
-                        update_mru_bits = new_mru_oh;
+                        update_mru_bits = &(new_mru_oh | lock_bits) ?
+                                            '0 : new_mru_oh;
                     else
                         update_mru_bits = new_mru_oh | mru_bits;
                 end
