@@ -1,5 +1,5 @@
 //
-// Copyright 2011-2015 Jeff Bush
+// Copyright 2016 Jeff Bush
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,30 @@
 // limitations under the License.
 //
 
-#ifndef FBWINDOW_H
-#define FBWINDOW_H
+#include <stdio.h>
 
-#include "core.h"
+//
+// Make sure global constructors/destructors are called properly by crt0
+//
 
-int init_frame_buffer(uint32_t width, uint32_t height);
-void update_frame_buffer(struct core*);
-void poll_fb_window_event(void);
-void enable_frame_buffer(bool enable);
-void set_frame_buffer_address(uint32_t address);
+class Foo
+{
+public:
+    Foo()
+    {
+        printf("Foo::Foo\n");
+    }
 
-extern uint32_t screen_refresh_rate;
+    ~Foo()
+    {
+        printf("Foo::~Foo\n");
+    }
+};
 
-#endif
+Foo f;
+
+int main()
+{
+    printf("main\n");
+    return 0;
+}
