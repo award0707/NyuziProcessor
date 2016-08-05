@@ -39,6 +39,9 @@
 // fills back to back. It also avoids livelock where two threads evict each
 // other's lines back and forth.
 //
+// Lock:
+// Assert lock_en at the same time as access_en or fill_en.
+//
 
 module l2_cache_lru
     #(parameter NUM_SETS = 1,
@@ -69,26 +72,27 @@ module l2_cache_lru
     logic update_lru_en;
     logic [SET_INDEX_WIDTH - 1:0] update_set;
     logic [MRU_BITS - 1:0] update_mru_bits;
-    logic [MRU_BITS - 1:0] combined;
     logic [SET_INDEX_WIDTH - 1:0] read_set;
     logic read_en;
     logic was_fill;
+    logic was_lock;
     logic [WAY_INDEX_WIDTH - 1:0] new_mru;
     logic [MRU_BITS - 1:0] new_mru_oh;
     logic [NUM_WAYS - 1:0] lock_bits;           // lock bits mask
     logic [NUM_WAYS - 1:0] update_lock_bits;
     logic [WAY_INDEX_WIDTH - 1:0] lock_way;
+    logic lock_unlock;          // store the lock command at the time of access
     logic update_lock_en;
     logic [NUM_WAYS - 1:0] lock_update_oh;
 `ifdef SIMULATION
     logic was_access;
 `endif
 
-    assign read_en = access_en || fill_en || lock_en;
+    assign read_en = access_en || fill_en;
     assign read_set = fill_en ? fill_set : access_set;
     assign new_mru = was_fill ? fill_way : access_update_way;
     assign update_lru_en = was_fill || access_update_en;
-    assign update_lock_en = lock_en;
+    assign update_lock_en = was_fill;
     assign lock_way = was_fill ? fill_way : access_update_way;
 
     sram_1r1w #(
@@ -112,7 +116,7 @@ module l2_cache_lru
         .SIZE(NUM_SETS),
         .READ_DURING_WRITE("NEW_DATA")
     ) lock_data(
-        .read_en(read_en),
+        .read_en(read_en || lock_en),
         .read_addr(read_set),
         .read_data(lock_bits),
 
@@ -129,20 +133,20 @@ module l2_cache_lru
         .one_hot(lock_update_oh),
         .index(lock_way));
 
-    //
     // if lock_en is asserted:
     // if lock_value is 1, set the locking bit of the desired way.
     // if it's 0, clear that bit instead (unlock).
     //
-    always_comb begin
-        if (lock_en)
-            update_lock_bits = lock_value ?
-                               (lock_bits | lock_update_oh) :
-                               (lock_bits & ~lock_update_oh);
+    always_comb
+    begin
+        if (was_lock)
+            update_lock_bits = lock_unlock ?
+                              (lock_bits | lock_update_oh) :
+                              (lock_bits & ~lock_update_oh);
         else
-            update_lock_bits = lock_bits;
+            update_lock_bits = '0; 
     end
-
+        
     //
     //  PLRUm algorithm.  Each way has a "MRU" bit which is 0 by default.
     //  That bit is set to 1 when the way is accessed.
@@ -171,8 +175,10 @@ module l2_cache_lru
                             2'b01: fill_way = 1;
                             default: fill_way = '0;
                     endcase
-                    combined = mru_bits | new_mru_oh;
-                    update_mru_bits = (&combined) ? new_mru_oh : combined;
+                    if(&(mru_bits | new_mru_oh | lock_bits))
+                        update_mru_bits = new_mru_oh;
+                    else
+                        update_mru_bits = new_mru_oh | mru_bits;
                 end
             end
 
@@ -188,8 +194,10 @@ module l2_cache_lru
                             4'b0111: fill_way = 3;
                             default: fill_way = '0;
                     endcase
-                    combined = mru_bits | new_mru_oh;
-                    update_mru_bits = (&combined) ? new_mru_oh : combined;
+                    if(&(mru_bits | new_mru_oh | lock_bits))
+                        update_mru_bits = new_mru_oh;
+                    else
+                        update_mru_bits = new_mru_oh | mru_bits;
                 end
             end
             
@@ -208,8 +216,10 @@ module l2_cache_lru
                             8'b01111111: fill_way = 7;
                             default: fill_way = '0;
                     endcase
-                    combined = mru_bits | new_mru_oh;
-                    update_mru_bits = (&combined) ? new_mru_oh : combined;
+                    if(&(mru_bits | new_mru_oh | lock_bits))
+                        update_mru_bits = new_mru_oh;
+                    else
+                        update_mru_bits = new_mru_oh | mru_bits;
                 end
             end
 
@@ -229,6 +239,8 @@ module l2_cache_lru
     begin
         update_set <= read_set;
         was_fill <= fill_en;
+        was_lock <= lock_en;
+        lock_unlock <= lock_value;            
     end
 
 `ifdef SIMULATION
