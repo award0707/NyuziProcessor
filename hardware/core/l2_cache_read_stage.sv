@@ -207,11 +207,10 @@ module l2_cache_read_stage(
 
     //
     // Lock bit controls
-    // They will be propagated to the L2 LRU module to determine whether the
-    // currently accessed line should be locked / unlocked.
-    // Lock_value is 1 if locking, 0 otherwise
+    // If this is a fill and lock, assert lock.  If no fill was required, 
+    // assert lock or unlock with the access.  Lock_value is 1 if locking, 0 if unlocking.
     //
-    assign l2r_lock_en = cache_hit && (is_lock || is_unlock);
+    assign l2r_lock_en = l2t_is_l2_fill ? is_lock : (cache_hit && (is_lock || is_unlock));
     assign l2r_lock_value = is_lock;
 
     //
