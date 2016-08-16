@@ -433,7 +433,7 @@ module writeback_stage(
                             MEM_S:      writeback_value_nxt[0] = scalar_t'(half_aligned);
                             MEM_SX:     writeback_value_nxt[0] = scalar_t'($signed(half_aligned));
                             MEM_SYNC:   writeback_value_nxt[0] = swapped_word_value;
-                            MEM_L:
+                            MEM_L, MEM_LOCK:
                             begin
                                 // Scalar Load
                                 if (dd_is_io_address)
@@ -516,7 +516,7 @@ module writeback_stage(
 
                     if (memory_op == MEM_B || memory_op == MEM_BX || memory_op == MEM_S
                         || memory_op == MEM_SX || memory_op == MEM_SYNC || memory_op == MEM_L
-                        || memory_op == MEM_CONTROL_REG)
+                        || memory_op == MEM_CONTROL_REG || memory_op == MEM_LOCK)
                     begin
                         // Must be scalar destination
                         assert(!dd_instruction.dest_is_vector);

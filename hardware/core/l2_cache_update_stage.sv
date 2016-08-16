@@ -77,7 +77,8 @@ module l2_cache_update_stage(
     begin
         case (l2r_request.packet_type)
             L2REQ_LOAD,
-            L2REQ_LOAD_SYNC:
+            L2REQ_LOAD_SYNC,
+            L2REQ_LOCK:
                 response_type = L2RSP_LOAD_ACK;
 
             L2REQ_STORE,
@@ -92,12 +93,6 @@ module l2_cache_update_stage(
 
             L2REQ_DINVALIDATE:
                 response_type = L2RSP_DINVALIDATE_ACK;
-
-            L2REQ_LOCK:
-                response_type = L2RSP_LOCK_ACK;
-
-            L2REQ_UNLOCK:
-                response_type = L2RSP_UNLOCK_ACK;
 
             default:
                 response_type = L2RSP_LOAD_ACK;

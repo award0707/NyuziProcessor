@@ -38,8 +38,6 @@ module l1_store_queue(
     input                                  dd_membar_en,
     input                                  dd_iinvalidate_en,
     input                                  dd_dinvalidate_en,
-    input                                  dd_lock_en,
-    input                                  dd_unlock_en,
     input cache_line_index_t               dd_store_addr,
     input [`CACHE_LINE_BYTES - 1:0]        dd_store_mask,
     input cache_line_data_t                dd_store_data,
@@ -63,8 +61,6 @@ module l1_store_queue(
     output logic                           sq_dequeue_flush,
     output logic                           sq_dequeue_iinvalidate,
     output logic                           sq_dequeue_dinvalidate,
-    output logic                           sq_dequeue_lock,
-    output logic                           sq_dequeue_unlock,
     output logic                           sq_rollback_en,
     output thread_bitmap_t                 sq_wake_bitmap,
 
@@ -79,8 +75,6 @@ module l1_store_queue(
         logic flush;
         logic iinvalidate;
         logic dinvalidate;
-        logic lock;
-        logic unlock;
         logic request_sent;
         logic response_received;
         logic sync_success;
@@ -129,15 +123,11 @@ module l1_store_queue(
                 && !pending_stores[thread_idx].flush
                 && !pending_stores[thread_idx].iinvalidate
                 && !pending_stores[thread_idx].dinvalidate
-                && !pending_stores[thread_idx].lock
-                && !pending_stores[thread_idx].unlock
                 && !dd_store_synchronized
                 && !pending_stores[thread_idx].request_sent
                 && !send_this_cycle
                 && !dd_flush_en
                 && !dd_iinvalidate_en
-                && !dd_lock_en
-                && !dd_unlock_en
                 && !dd_dinvalidate_en;
             assign is_restarted_sync_request = pending_stores[thread_idx].valid
                 && pending_stores[thread_idx].response_received
@@ -151,7 +141,7 @@ module l1_store_queue(
                 && pending_stores[thread_idx].thread_waiting;
             assign enqueue_cache_control = dd_store_thread_idx == thread_idx_t'(thread_idx)
                 && (!pending_stores[thread_idx].valid || got_response_this_entry)
-                && (dd_flush_en || dd_dinvalidate_en || dd_iinvalidate_en || dd_lock_en || dd_unlock_en);
+                && (dd_flush_en || dd_dinvalidate_en || dd_iinvalidate_en);
             assign sq_sync_store_pending[thread_idx] = pending_stores[thread_idx].valid
                 && pending_stores[thread_idx].synchronized;
 
@@ -159,8 +149,7 @@ module l1_store_queue(
             begin
                 rollback[thread_idx] = 0;
                 if (dd_store_thread_idx == thread_idx_t'(thread_idx)
-                     && (dd_flush_en || dd_dinvalidate_en || dd_iinvalidate_en || dd_store_en
-                         || dd_lock_en || dd_unlock_en))
+                     && (dd_flush_en || dd_dinvalidate_en || dd_iinvalidate_en || dd_store_en))
                 begin
                     // Trigger a rollback if the store buffer is full.
                     // - On the first synchronized store request, always suspend the thread, even
@@ -242,8 +231,6 @@ module l1_store_queue(
                             pending_stores[thread_idx].flush <= 0;
                             pending_stores[thread_idx].iinvalidate <= 0;
                             pending_stores[thread_idx].dinvalidate <= 0;
-                            pending_stores[thread_idx].lock <= 0;
-                            pending_stores[thread_idx].unlock <= 0;
                             pending_stores[thread_idx].request_sent <= 0;
                             pending_stores[thread_idx].response_received <= 0;
                         end
@@ -258,8 +245,6 @@ module l1_store_queue(
                         pending_stores[thread_idx].flush <= dd_flush_en;
                         pending_stores[thread_idx].iinvalidate <= dd_iinvalidate_en;
                         pending_stores[thread_idx].dinvalidate <= dd_dinvalidate_en;
-                        pending_stores[thread_idx].lock <= dd_lock_en;
-                        pending_stores[thread_idx].unlock <= dd_unlock_en;
                         pending_stores[thread_idx].request_sent <= 0;
                         pending_stores[thread_idx].response_received <= 0;
                     end
@@ -303,8 +288,6 @@ module l1_store_queue(
     assign sq_dequeue_flush = pending_stores[send_grant_idx].flush;
     assign sq_dequeue_iinvalidate = pending_stores[send_grant_idx].iinvalidate;
     assign sq_dequeue_dinvalidate = pending_stores[send_grant_idx].dinvalidate;
-    assign sq_dequeue_lock = pending_stores[send_grant_idx].lock;
-    assign sq_dequeue_unlock = pending_stores[send_grant_idx].unlock;
 
     always_ff @(posedge clk)
     begin
@@ -313,9 +296,7 @@ module l1_store_queue(
             && pending_stores[dd_store_bypass_thread_idx].valid
             && !pending_stores[dd_store_bypass_thread_idx].flush
             && !pending_stores[dd_store_bypass_thread_idx].iinvalidate
-            && !pending_stores[dd_store_bypass_thread_idx].dinvalidate
-            && !pending_stores[dd_store_bypass_thread_idx].lock
-            && !pending_stores[dd_store_bypass_thread_idx].unlock)
+            && !pending_stores[dd_store_bypass_thread_idx].dinvalidate)
         begin
             // There is a store for this address, set mask
             sq_store_bypass_mask <= pending_stores[dd_store_bypass_thread_idx].mask;
@@ -339,12 +320,11 @@ module l1_store_queue(
         begin
             // Only one request can be active per cycle.
             assert($onehot0({dd_store_en, dd_flush_en, dd_membar_en, dd_iinvalidate_en,
-                dd_dinvalidate_en, dd_lock_en, dd_unlock_en}));
+                dd_dinvalidate_en}));
 
             // Check that above is true for dequeued entries
             assert(!sq_dequeue_ready || $onehot0({pending_stores[send_grant_idx].flush,
                 pending_stores[send_grant_idx].dinvalidate, pending_stores[send_grant_idx].iinvalidate,
-                pending_stores[send_grant_idx].lock, pending_stores[send_grant_idx].unlock,
                 pending_stores[send_grant_idx].synchronized}));
 
             // Can't assert wake and sleep signals in same cycle

@@ -183,9 +183,8 @@ module instruction_decode_stage(
             7'b10_1_1101: dlut_out = {F, T, T, IMM_24_10, SCLR1_4_0, SCLR2_NONE,    T, T, F, T, OP2_SRC_IMMEDIATE, MASK_SRC_ALL_ONES, F, F};
             7'b10_1_1110: dlut_out = {F, T, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, T, F, T, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F};
 
-            // Lock, unlock format
-            7'b10_1_1010: dlut_out = {F, T, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F}; 
-            7'b10_1_1011: dlut_out = {F, T, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F};
+            // Locking load
+            7'b10_1_1011: dlut_out = {F, F, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F}; 
 
             // Format C (cache control)
             7'b1110_000: dlut_out = {F, F, F,  IMM_24_15, SCLR1_4_0, SCLR2_9_5,  F, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_ALL_ONES, F, F};
@@ -371,15 +370,12 @@ module instruction_decode_stage(
     assign memory_access_type = memory_op_t'(ifd_instruction[28:25]);
     assign decoded_instr_nxt.memory_access_type = memory_access_type;
     assign decoded_instr_nxt.is_memory_access = ifd_instruction[31:30] == 2'b10
-        && !has_trap && ifd_instruction[28:26] != 3'b101;
+        && !has_trap;
     assign decoded_instr_nxt.is_load = ifd_instruction[29]
         && is_fmt_m;
     assign decoded_instr_nxt.is_cache_control = ifd_instruction[31:28] == 4'b1110
         && !has_trap;
     assign decoded_instr_nxt.cache_control_op = cache_op_t'(ifd_instruction[27:25]);
-    assign decoded_instr_nxt.is_cache_control_ext = ifd_instruction[31:30] == 2'b10
-        && ifd_instruction[28:26] == 3'b101;
-    assign decoded_instr_nxt.cache_control_ext_op = cache_ext_op_t'(ifd_instruction[25]);
 
     always_comb
     begin

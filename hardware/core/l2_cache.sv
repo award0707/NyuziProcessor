@@ -48,6 +48,7 @@ module l2_cache(
     // XXX AUTOLOGIC not generating these.
     l2req_packet_t l2bi_request;
     cache_line_data_t l2bi_data_from_memory;
+
     logic l2r_lock_en;
     logic l2r_lock_value;
 

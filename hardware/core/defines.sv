@@ -94,6 +94,7 @@ typedef enum logic[3:0] {
     MEM_CONTROL_REG         = 4'b0110,  // Control register
     MEM_BLOCK               = 4'b0111,  // Vector block
     MEM_BLOCK_M             = 4'b1000,
+    MEM_LOCK                = 4'b1011,  // Load with line lock
     MEM_SCGATH              = 4'b1101,  // Vector scatter/gather
     MEM_SCGATH_M            = 4'b1110
 } memory_op_t;
@@ -108,11 +109,6 @@ typedef enum logic[2:0] {
     CACHE_TLB_INVAL_ALL     = 3'b110,
     CACHE_ITLB_INSERT       = 3'b111
 } cache_op_t;
-
-typedef enum logic {
-    CACHE_UNLOCK            = 1'b0,
-    CACHE_LOCK              = 1'b1
-} cache_ext_op_t;
 
 typedef enum logic[2:0] {
     BRANCH_ALL              = 3'b000,
@@ -230,8 +226,6 @@ typedef struct packed {
     control_register_t creg_index;
     logic is_cache_control;
     cache_op_t cache_control_op;
-    logic is_cache_control_ext;
-    cache_ext_op_t cache_control_ext_op;
 } decoded_instruction_t;
 
 `define IEEE754_B32_EXP_WIDTH 8
@@ -321,8 +315,7 @@ typedef enum logic[3:0] {
     L2REQ_FLUSH,
     L2REQ_IINVALIDATE,
     L2REQ_DINVALIDATE,
-    L2REQ_LOCK,
-    L2REQ_UNLOCK
+    L2REQ_LOCK
 } l2req_packet_type_t;
 
 typedef struct packed {
@@ -340,9 +333,7 @@ typedef enum logic[2:0] {
     L2RSP_STORE_ACK,
     L2RSP_FLUSH_ACK,
     L2RSP_IINVALIDATE_ACK,
-    L2RSP_DINVALIDATE_ACK,
-    L2RSP_LOCK_ACK,
-    L2RSP_UNLOCK_ACK
+    L2RSP_DINVALIDATE_ACK
 } l2rsp_packet_type_t;
 
 typedef struct packed {

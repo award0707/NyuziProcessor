@@ -102,7 +102,6 @@ module l2_cache_read_stage(
     logic is_load;
     logic is_store;
     logic is_lock;
-    logic is_unlock;
     logic update_dirty;
     logic update_tag;
     logic is_flush_first_pass;
@@ -120,7 +119,6 @@ module l2_cache_read_stage(
         ? hit_way_idx : l2t_fill_way;
     assign is_dinvalidate = l2t_request.packet_type == L2REQ_DINVALIDATE;
     assign is_lock = l2t_request.packet_type == L2REQ_LOCK;
-    assign is_unlock = l2t_request.packet_type == L2REQ_UNLOCK;
 
     //
     // Check for cache hit
@@ -206,11 +204,9 @@ module l2_cache_read_stage(
     assign l2r_update_lru_hit_way = hit_way_idx;
 
     //
-    // Lock bit controls
-    // If this is a fill and lock, assert lock.  If no fill was required, 
-    // assert lock or unlock with the access.  Lock_value is 1 if locking, 0 if unlocking.
+    // Lock request
     //
-    assign l2r_lock_en = l2t_is_l2_fill ? is_lock : (cache_hit && (is_lock || is_unlock));
+    assign l2r_lock_en = l2t_request.packet_type == L2REQ_LOCK;
     assign l2r_lock_value = is_lock;
 
     //
@@ -293,7 +289,7 @@ module l2_cache_read_stage(
                     end
 
                     default:
-                        ;
+                        ;    
                 endcase
 
                 l2r_store_sync_success <= can_store_sync;
