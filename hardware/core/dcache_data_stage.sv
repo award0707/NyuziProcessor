@@ -92,7 +92,7 @@ module dcache_data_stage(
     input l1d_set_idx_t                       l2i_dtag_update_set,
     input l1d_tag_t                           l2i_dtag_update_tag,
 
-     // To l1_l2_interface
+    // To l1_l2_interface
     output logic                              dd_cache_miss,
     output cache_line_index_t                 dd_cache_miss_addr,
     output thread_idx_t                       dd_cache_miss_thread_idx,
@@ -100,9 +100,10 @@ module dcache_data_stage(
     output logic                              dd_store_en,
     output logic                              dd_flush_en,
     output logic                              dd_membar_en,
-    output logic                              dd_lock_en,
+    output logic                              dd_load_lock,
     output logic                              dd_iinvalidate_en,
     output logic                              dd_dinvalidate_en,
+    output logic                              dd_store_lock,
     output [`CACHE_LINE_BYTES - 1:0]          dd_store_mask,
     output cache_line_index_t                 dd_store_addr,
     output cache_line_data_t                  dd_store_data,
@@ -192,8 +193,8 @@ module dcache_data_stage(
         && dt_instruction.memory_access_type != MEM_CONTROL_REG
         && dt_tlb_hit
         && !is_io_address;
-    assign dcache_load_en = dcache_access_en && dt_instruction.is_load;
-    assign dcache_store_en = dcache_access_en && !dt_instruction.is_load
+    assign dcache_load_en = dcache_access_en && dt_instruction.is_load && !dd_store_lock;
+    assign dcache_store_en = dcache_access_en && (!dt_instruction.is_load || dd_store_lock)
         && dd_store_mask != 0;
     assign dcache_request_addr = {dt_request_paddr[31:`CACHE_LINE_OFFSET_WIDTH],
         {`CACHE_LINE_OFFSET_WIDTH{1'b0}}};
@@ -208,7 +209,11 @@ module dcache_data_stage(
         && dt_tlb_present
         && !supervisor_fault;
     assign dd_store_thread_idx = dt_thread_idx;
-    assign dd_lock_en = dcache_load_en && dt_instruction.memory_access_type == MEM_LOCK;
+    assign dd_load_lock = dcache_load_en && dt_instruction.memory_access_type == MEM_LOCK;
+        // If a Lock request causes a hit on L1, generate a store request to lock the data
+        // into the L2 cache.
+    assign dd_store_lock = cache_hit && dt_instruction.memory_access_type == MEM_LOCK
+        && dt_instruction.is_load;
 
     // Noncached I/O memory access
     assign io_access_en = dt_instruction_valid

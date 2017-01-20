@@ -119,7 +119,8 @@ module l2_axi_bus_interface(
         || l2r_request.packet_type == L2REQ_STORE
         || l2r_request.packet_type == L2REQ_LOAD_SYNC
         || l2r_request.packet_type == L2REQ_STORE_SYNC
-        || l2r_request.packet_type == L2REQ_LOCK);
+        || l2r_request.packet_type == L2REQ_LOAD_LOCK
+        || l2r_request.packet_type == L2REQ_STORE_LOCK);
     assign writeback_pending = !writeback_queue_empty;
     assign load_request_pending = !load_queue_empty;
 
