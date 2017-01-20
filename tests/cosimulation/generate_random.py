@@ -15,30 +15,33 @@
 # limitations under the License.
 #
 
+"""
+ Generate a pseudorandom instruction stream.
 
-#
-# Generate a pseudorandom instruction stream.
-#
-# v0, s0 - Base registers for shared data segment (read only)
-# v1, s1 - Computed address registers.  Guaranteed to be 64 byte aligned and in private memory segment.
-# v2, s2 - Base registers for private data segment (read/write, per thread)
-# v3-v8, s3-s8 - Operation registers
-# s9 - pointer to register mapped IO space (0xffff0000)
-#
-# Memory map:
-#  000000 start of code (thread0, 1, 2, 3...), shared data segment (read only)
-#  800000 start of private data (read/write), thread 0
-#  900000 start of private data (read/write), thread 1
-#  a00000 start of private data (read/write), thread 2
-#  b00000 start of private data (read/write), thread 3
-#
+ v0, s0 - Base registers for shared data segment (read only)
+ v1, s1 - Computed address registers.  Guaranteed to be 64 byte aligned and
+          in private memory segment.
+ v2, s2 - Base registers for private data segment (read/write, per thread)
+ v3-v8, s3-s8 - Operation registers
+ s9 - pointer to register mapped IO space (0xffff0000)
 
+ Memory map:
+  000000 start of code (thread0, 1, 2, 3...), shared data segment (read only)
+  800000 start of private data (read/write), thread 0
+  900000 start of private data (read/write), thread 1
+  a00000 start of private data (read/write), thread 2
+  b00000 start of private data (read/write), thread 3
+"""
+
+
+import argparse
 import random
 import sys
-import argparse
 
 
 def generate_arith_reg():
+    """Return a random register number for an arithmetic operation"""
+
     return random.randint(3, 8)
 
 FP_FORMS = [
@@ -85,7 +88,9 @@ BINARY_OPS = [
 ]
 
 
-def generate_binary_arith(file):
+def generate_binary_arith(outfile):
+    """Write a single binary arithmetic instruction to a file"""
+
     mnemonic = random.choice(BINARY_OPS)
     if mnemonic == 'shuffle':
         typed = 'v'
@@ -106,17 +111,17 @@ def generate_binary_arith(file):
     rega = generate_arith_reg()
     regb = generate_arith_reg()
     maskreg = generate_arith_reg()
-    opstr = '\t\t%s%s %c%d, ' % (mnemonic, suffix, typed, dest)
+    opstr = '\t\t{}{} {}{}, '.format(mnemonic, suffix, typed, dest)
     if suffix != '':
-        opstr += 's%d, ' % maskreg  # Add mask register
+        opstr += 's{}, '.format(maskreg)  # Add mask register
 
-    opstr += typea + str(rega) + ', '
+    opstr += '{}{}, '.format(typea, rega)
     if typeb == 'i':
-        opstr += str(random.randint(-0x1ff, 0x1ff))  # Immediate value
+        opstr += str(random.randint(-0x7f, 0x7f))  # Immediate value
     else:
-        opstr += typeb + str(regb)
+        opstr += '{}{}'.format(typeb, regb)
 
-    file.write(opstr + '\n')
+    outfile.write(opstr + '\n')
 
 UNARY_OPS = [
     'clz',
@@ -125,19 +130,21 @@ UNARY_OPS = [
 ]
 
 
-def generate_unary_arith(file):
+def generate_unary_arith(outfile):
+    """Write a single unary arithmetic instruction to a file"""
+
     mnemonic = random.choice(UNARY_OPS)
     dest = generate_arith_reg()
     rega = generate_arith_reg()
     fmt = random.randint(0, 3)
     if fmt == 0:
         maskreg = generate_arith_reg()
-        file.write('\t\t%s_mask  v%d, s%d, v%d\n' %
-                   (mnemonic, dest, maskreg, rega))
+        outfile.write('\t\t{}_mask  v{}, s{}, v{}\n'.format
+                      (mnemonic, dest, maskreg, rega))
     elif fmt == 1:
-        file.write('\t\t%s v%d, v%d\n' % (mnemonic, dest, rega))
+        outfile.write('\t\t{} v{}, v{}\n'.format(mnemonic, dest, rega))
     else:
-        file.write('\t\t%s s%d, s%d\n' % (mnemonic, dest, rega))
+        outfile.write('\t\t{} s{}, s{}\n'.format(mnemonic, dest, rega))
 
 COMPARE_FORMS = [
     ('v', 'v'),
@@ -164,19 +171,21 @@ COMPARE_OPS = [
 ]
 
 
-def generate_compare(file):
+def generate_compare(outfile):
+    """Write a single comparison instruction to a file"""
+
     typea, typeb = random.choice(COMPARE_FORMS)
     dest = generate_arith_reg()
     rega = generate_arith_reg()
     regb = generate_arith_reg()
     opsuffix = random.choice(COMPARE_OPS)
-    opstr = '\t\tcmp%s s%d, %c%d, ' % (opsuffix, dest, typea, rega)
+    opstr = '\t\tcmp{} s{}, {}{}, '.format(opsuffix, dest, typea, rega)
     if random.randint(0, 1) == 0 and not opsuffix.endswith('_f'):
         opstr += str(random.randint(-0x1ff, 0x1ff))  # Immediate value
     else:
-        opstr += typeb + str(regb)
+        opstr += '{}{}'.format(typeb, regb)
 
-    file.write(opstr + '\n')
+    outfile.write(opstr + '\n')
 
 LOAD_OPS = [
     ('_32', 4),
@@ -193,19 +202,22 @@ STORE_OPS = [
 ]
 
 
-def generate_memory_access(file):
+def generate_memory_access(outfile):
+    """ Write a random single memory load or store instruction to the file"""
+
     # v0/s0 represent the shared segment, which is read only
     # v1/s1 represent the private segment, which is read/write
-    ptrReg = random.randint(0, 1)
+    ptr_reg = random.randint(0, 1)
 
-    opstr = 'load' if ptrReg == 0 or random.randint(0, 1) else 'store'
+    opstr = 'load' if ptr_reg == 0 or random.randint(0, 1) else 'store'
 
-    opType = random.randint(0, 2)
-    if opType == 0:
+    op_type = random.randint(0, 2)
+    if op_type == 0:
         # Block vector
         offset = random.randint(0, 16) * 64
-        opstr += '_v v%d, %d(s%d)' % (generate_arith_reg(), offset, ptrReg)
-    elif opType == 1:
+        opstr += '_v v{}, {}(s{})'.format(generate_arith_reg(),
+                                          offset, ptr_reg)
+    elif op_type == 1:
         # Scatter/gather
         offset = random.randint(0, 16) * 4
         if opstr == 'load':
@@ -213,15 +225,15 @@ def generate_memory_access(file):
         else:
             opstr += '_scat'
 
-        maskType = random.randint(0, 1)
-        if maskType == 1:
+        mask_type = random.randint(0, 1)
+        if mask_type == 1:
             opstr += '_mask'
 
-        opstr += ' v%d' % generate_arith_reg()
-        if maskType != 0:
-            opstr += ', s%d' % generate_arith_reg()
+        opstr += ' v{}'.format(generate_arith_reg())
+        if mask_type:
+            opstr += ', s{}'.format(generate_arith_reg())
 
-        opstr += ', %d(v%d)' % (offset, ptrReg)
+        opstr += ', {}(v{})'.format(offset, ptr_reg)
     else:
         # Scalar
         if opstr == 'load':
@@ -236,18 +248,23 @@ def generate_memory_access(file):
             opstr = 'membar\n\t\t' + opstr
 
         offset = random.randint(0, 16) * align
-        opstr += '%s s%d, %d(s%d)' % (suffix,
-                                      generate_arith_reg(), offset, ptrReg)
+        opstr += '{} s{}, {}(s{})'.format(suffix, generate_arith_reg(),
+                                          offset, ptr_reg)
 
-    file.write('\t\t' + opstr + '\n')
+    outfile.write('\t\t' + opstr + '\n')
 
 
-def generate_device_io(file):
+def generate_device_io(outfile):
+    """
+    Write a random single memory load or store instruction that accesses
+    device space (0xffff0000-0xffffffff) to the file.
+    """
+
     if random.randint(0, 1):
-        file.write('\t\tload_32 s%d, %d(s9)\n' %
-                   (generate_arith_reg(), random.randint(0, 1) * 4))
+        outfile.write('\t\tload_32 s{}, {}(s9)\n'.format(
+            generate_arith_reg(), random.randint(0, 1) * 4))
     else:
-        file.write('\t\tstore_32 s%d, (s9)\n' % generate_arith_reg())
+        outfile.write('\t\tstore_32 s{}, (s9)\n'.format(generate_arith_reg()))
 
 BRANCH_TYPES = [
     ('bfalse', True),
@@ -259,21 +276,33 @@ BRANCH_TYPES = [
 ]
 
 
-def generate_branch(file):
-    # Branch
-    branchType, isCond = random.choice(BRANCH_TYPES)
-    if isCond:
-        file.write('\t\t%s s%d, %df\n' %
-                   (branchType, generate_arith_reg(), random.randint(1, 6)))
+def generate_branch(outfile):
+    """
+    Write a single branch instruction to outfile. This will use a relative
+    forward branch to an anonymous label 1-6 instructions away.
+    """
+
+    branch_type, is_cond = random.choice(BRANCH_TYPES)
+    if is_cond:
+        outfile.write('\t\t{} s{}, {}f\n'.format(
+            branch_type, generate_arith_reg(), random.randint(1, 6)))
     else:
-        file.write('\t\t%s %df\n' % (branchType, random.randint(1, 6)))
+        outfile.write('\t\t{} {}f\n'.format(branch_type, random.randint(1, 6)))
 
 
-def generate_computed_pointer(file):
+def generate_computed_pointer(outfile):
+    """
+    Generate an arithmetic instruction that writes to one of the special
+    'computed pointer' registers. These are guaranteed to be valid memory
+    locations
+    """
+
     if random.randint(0, 1) == 0:
-        file.write('\t\tadd_i s1, s2, %d\n' % (random.randint(0, 16) * 64))
+        outfile.write('\t\tadd_i s1, s2, {}\n'.format(
+            random.randint(0, 16) * 64))
     else:
-        file.write('\t\tadd_i v1, v2, %d\n' % (random.randint(0, 16) * 64))
+        outfile.write('\t\tadd_i v1, v2, {}\n'.format(
+            random.randint(0, 16) * 64))
 
 CACHE_CONTROL_INSTRS = [
     'dflush s1',
@@ -282,10 +311,12 @@ CACHE_CONTROL_INSTRS = [
 ]
 
 
-def generate_cache_control(file):
-    file.write('\t\t%s\n' % random.choice(CACHE_CONTROL_INSTRS))
+def generate_cache_control(outfile):
+    """Generate a single cache control instruction"""
 
-generate_funcs = [
+    outfile.write('\t\t{}\n'.format(random.choice(CACHE_CONTROL_INSTRS)))
+
+GENERATE_FUNCS = [
     (0.1, generate_computed_pointer),
     (0.5, generate_binary_arith),
     (0.05, generate_unary_arith),
@@ -297,9 +328,11 @@ generate_funcs = [
 ]
 
 
-def generate_test(filename, numInstructions, numThreads, enableInterrupts):
-    file = open(filename, 'w')
-    file.write('# This file auto-generated by ' + sys.argv[0] + '''
+def generate_test(filename):
+    """Write a complete assembly file with a pseudorandom instruction stream"""
+
+    with open(filename, 'w') as outfile:
+        outfile.write('# This file auto-generated by ' + sys.argv[0] + '''
 
                 .include "../asm_macros.inc"
 
@@ -357,8 +390,8 @@ fill_loop:      store_32 s5, (s3)
                 move v8, 73
 ''')
 
-    if enableInterrupts:
-        file.write('''
+        if enable_interrupts:
+            outfile.write('''
                 ###### Set up interrupt handler ###################################
                 lea s10, interrupt_handler
                 setcr s10, CR_TRAP_HANDLER
@@ -369,7 +402,7 @@ fill_loop:      store_32 s5, (s3)
 
 ''')
 
-    file.write('''
+        outfile.write('''
                 ###### Compute address of per-thread code and branch ######
                 getcr s3, CR_CURRENT_THREAD
                 shl s3, s3, 2
@@ -396,34 +429,34 @@ interrupt_handler:
 ptrvec:         .long 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60
 branch_addrs:   .long ''')
 
-    for i in range(numThreads):
-        if i != 0:
-            file.write(", ")
+        for i in range(num_threads):
+            if i:
+                outfile.write(', ')
 
-        file.write('start_thread' + str(i))
+            outfile.write('start_thread{}'.format(i))
 
-    file.write('''
+        outfile.write('''
 fill_length:    .long 0x1000 / 4
 generator_a:    .long 1103515245
 generator_c:    .long 12345
 device_ptr:     .long 0xffff0004
 ''')
 
-    for thread in range(numThreads):
-        file.write('\nstart_thread%d:\n' % thread)
-        labelIdx = 1
-        for x in range(numInstructions):
-            file.write(str(labelIdx + 1) + ': ')
-            labelIdx = (labelIdx + 1) % 6
-            instType = random.random()
-            cumulProb = 0.0
-            for prob, func in generate_funcs:
-                cumulProb += prob
-                if instType < cumulProb:
-                    func(file)
-                    break
+        for thread in range(num_threads):
+            outfile.write('\nstart_thread{}:\n'.format(thread))
+            label_idx = 1
+            for i in range(num_instructions):
+                outfile.write('{}:'.format(label_idx + 1))
+                label_idx = (label_idx + 1) % 6
+                inst_type = random.random()
+                cumul_prob = 0.0
+                for prob, func in GENERATE_FUNCS:
+                    cumul_prob += prob
+                    if inst_type < cumul_prob:
+                        func(outfile)
+                        break
 
-        file.write('''
+            outfile.write('''
         1: nop
         2: nop
         3: nop
@@ -434,8 +467,6 @@ device_ptr:     .long 0xffff0004
         nop
         halt_current_thread
         ''')
-
-    file.close()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-o', help='File to write result into',
@@ -449,18 +480,18 @@ parser.add_argument(
 parser.add_argument('-i', help='Enable interrupts', action='store_true')
 parser.add_argument('-t', help='Number of threads', type=int, default=4)
 args = vars(parser.parse_args())
-numInstructions = args['n']
-enableInterrupts = args['i']
-numThreads = args['t']
+num_instructions = args['n']
+enable_interrupts = args['i']
+num_threads = args['t']
 
-if (numInstructions + 120) * numThreads * 4 > 0x800000:
+if (num_instructions + 120) * num_threads * 4 > 0x800000:
     print('Instruction space exceeds available memory.')
 
 if args['m']:
-    for x in range(args['m']):
-        filename = 'random%04d.s' % x
-        print('generating ' + filename)
-        generate_test(filename, numInstructions, numThreads, enableInterrupts)
+    for fileno in range(args['m']):
+        output_file = 'random{:04d}.s'.format(fileno)
+        print('generating ' + output_file)
+        generate_test(output_file)
 else:
     print('generating ' + args['o'])
-    generate_test(args['o'], numInstructions, numThreads, enableInterrupts)
+    generate_test(args['o'])

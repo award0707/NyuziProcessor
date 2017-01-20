@@ -15,20 +15,20 @@
 # limitations under the License.
 #
 
+"""Test PS/2 keyboard peripheral"""
+
 import sys
 
-# Test PS/2 keyboard peripheral
-
 sys.path.insert(0, '../..')
-from test_harness import *
+import test_harness
 
 
-def ps2_test(name):
-    build_program(['ps2.c'])
-    result = run_program(environment='verilator')
-    if result.find('PASS') == -1:
-        raise TestException(
+@test_harness.test
+def ps2(_):
+    test_harness.build_program(['ps2.c'])
+    result = test_harness.run_program(environment='verilator')
+    if 'PASS' not in result:
+        raise test_harness.TestException(
             'program did not indicate pass\n' + result)
 
-register_tests(ps2_test, ['ps2'])
-execute_tests()
+test_harness.execute_tests()

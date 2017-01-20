@@ -26,7 +26,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-#include "core.h"
+#include "processor.h"
 #include "cosimulation.h"
 #include "device.h"
 #include "instruction-set.h"
@@ -40,7 +40,7 @@
 #define TRAP_LEVELS 2
 
 #ifdef DUMP_INSTRUCTION_STATS
-#define TALLY_INSTRUCTION(type) thread->core->stat ## type++
+#define TALLY_INSTRUCTION(type) thread->core->proc->stat ## type++
 #else
 #define TALLY_INSTRUCTION(type) do { } while (0)
 #endif
@@ -63,14 +63,13 @@ struct thread
     uint32_t asid;
     uint32_t page_dir;
     uint32_t interrupt_mask;
-    uint32_t pending_interrupts;
+    uint32_t latched_interrupts;
     bool enable_interrupt;
     bool enable_mmu;
     bool enable_supervisor;
     uint32_t subcycle;
     uint32_t scalar_reg[NUM_REGISTERS - 1];	// PC (31) not included here
     uint32_t vector_reg[NUM_REGISTERS][NUM_VECTOR_LANES];
-    bool interrupt_pending;
 
     // There are two levels of trap information, to handle a nested TLB
     // miss occurring in the middle of another trap.
@@ -97,27 +96,34 @@ struct tlb_entry
 
 struct core
 {
+    struct processor *proc;
     struct thread *threads;
-    struct breakpoint *breakpoints;
-    uint32_t *memory;
-    uint32_t memory_size;
-    uint32_t total_threads;
-    uint32_t thread_enable_mask;
     uint32_t trap_handler_pc;
     uint32_t tlb_miss_handler_pc;
     uint32_t phys_tlb_update_addr;
+    uint32_t is_level_triggered;    // Bitmap
     struct tlb_entry *itlb;
     uint32_t next_itlb_way;
     struct tlb_entry *dtlb;
     uint32_t next_dtlb_way;
+};
+
+struct processor
+{
+    uint32_t total_threads;
+    uint32_t thread_enable_mask;
+    uint32_t num_cores;
+    uint32_t threads_per_core;
+    struct core *cores;
+    struct breakpoint *breakpoints;
+    uint32_t *memory;
+    uint32_t memory_size;
+    uint32_t interrupt_levels;
     bool crashed;
     bool single_stepping;
     bool stop_on_fault;
     bool enable_tracing;
     bool enable_cosim;
-    uint32_t current_timer_count;
-    int64_t total_instructions;
-    uint32_t start_cycle_count;
 #ifdef DUMP_INSTRUCTION_STATS
     int64_t stat_vector_inst;
     int64_t stat_load_inst;
@@ -126,6 +132,9 @@ struct core
     int64_t stat_imm_arith_inst;
     int64_t stat_reg_arith_inst;
 #endif
+    uint32_t current_timer_count;
+    int64_t total_instructions;
+    uint32_t start_cycle_count;
 };
 
 struct breakpoint
@@ -136,20 +145,23 @@ struct breakpoint
     bool restart;
 };
 
+static inline const struct thread *get_const_thread(const struct processor *proc, uint32_t thread_id);
+static inline struct thread *get_thread(struct processor *proc, uint32_t thread_id);
 static void print_thread_registers(const struct thread*);
-static uint32_t get_thread_scalar_reg(const struct thread*, uint32_t reg);
+static uint32_t get_scalar_reg(const struct thread*, uint32_t reg);
 static void set_scalar_reg(struct thread*, uint32_t reg, uint32_t value);
 static void set_vector_reg(struct thread*, uint32_t reg, uint32_t mask,
                            uint32_t *values);
 static void invalidate_sync_address(struct core*, uint32_t address);
 static void try_to_dispatch_interrupt(struct thread*);
+static uint32_t get_pending_interrupts(struct thread*);
 static void raise_trap(struct thread*, uint32_t address, enum trap_type type, bool is_store,
                        bool is_data_cache);
 static bool translate_address(struct thread*, uint32_t virtual_address, uint32_t
                               *physical_address, bool is_store, bool is_data_cache);
 static uint32_t scalar_arithmetic_op(enum arithmetic_op, uint32_t value1, uint32_t value2);
 static bool is_compare_op(uint32_t op);
-static struct breakpoint *lookup_breakpoint(struct core*, uint32_t pc);
+static struct breakpoint *lookup_breakpoint(struct processor*, uint32_t pc);
 static void execute_register_arith_inst(struct thread*, uint32_t instruction);
 static void execute_immediate_arith_inst(struct thread*, uint32_t instruction);
 static void execute_scalar_load_store_inst(struct thread*, uint32_t instruction);
@@ -160,52 +172,55 @@ static void execute_memory_access_inst(struct thread*, uint32_t instruction);
 static void execute_branch_inst(struct thread*, uint32_t instruction);
 static void execute_cache_control_inst(struct thread*, uint32_t instruction);
 static bool execute_instruction(struct thread*);
-static void timer_tick(struct core *core);
+static void timer_tick(struct processor *proc);
 
-struct core *init_core(uint32_t memory_size, uint32_t total_threads, bool randomize_memory,
-                       const char *shared_memory_file)
+struct processor *init_processor(uint32_t memory_size, uint32_t num_cores,
+                                 uint32_t threads_per_core, bool randomize_memory,
+                                 const char *shared_memory_file)
 {
     uint32_t address;
-    uint32_t threadid;
+    uint32_t thread_id;
+    uint32_t core_id;
+    struct processor *proc;
     struct core *core;
     int i;
     struct timeval tv;
     int shared_memory_fd;
 
     // Limited by enable mask
-    assert(total_threads <= 32);
+    assert(num_cores * threads_per_core <= 32);
 
-    core = (struct core*) calloc(sizeof(struct core), 1);
-    core->memory_size = memory_size;
+    proc = (struct processor*) calloc(sizeof(struct processor), 1);
+    proc->memory_size = memory_size;
     if (shared_memory_file != NULL)
     {
         shared_memory_fd = open(shared_memory_file, O_CREAT | O_RDWR, 666);
         if (shared_memory_fd < 0)
         {
-            perror("init_core: Error opening shared memory file");
+            perror("init_processor: Error opening shared memory file");
             return NULL;
         }
 
         if (ftruncate(shared_memory_fd, memory_size) < 0)
         {
-            perror("init_core: couldn't resize shared memory file");
+            perror("init_processor: couldn't resize shared memory file");
             return NULL;
         }
 
-        core->memory = mmap(NULL, memory_size, PROT_READ | PROT_WRITE, MAP_SHARED
+        proc->memory = mmap(NULL, memory_size, PROT_READ | PROT_WRITE, MAP_SHARED
                             | MAP_FILE, shared_memory_fd, 0);
-        if (core->memory == NULL)
+        if (proc->memory == NULL)
         {
-            perror("init_core: mmap failed");
+            perror("init_processor: mmap failed");
             return NULL;
         }
     }
     else
     {
-        core->memory = (uint32_t*) malloc(memory_size);
-        if (core->memory == NULL)
+        proc->memory = (uint32_t*) malloc(memory_size);
+        if (proc->memory == NULL)
         {
-            perror("init_core: malloc failed");
+            perror("init_processor: malloc failed");
             return NULL;
         }
 
@@ -213,53 +228,61 @@ struct core *init_core(uint32_t memory_size, uint32_t total_threads, bool random
         {
             srand((unsigned int) time(NULL));
             for (address = 0; address < memory_size / 4; address++)
-                core->memory[address] = (uint32_t) rand();
+                proc->memory[address] = (uint32_t) rand();
         }
         else
-            memset(core->memory, 0, core->memory_size);
+            memset(proc->memory, 0, proc->memory_size);
     }
 
-    core->itlb = (struct tlb_entry*) malloc(sizeof(struct tlb_entry) * TLB_SETS * TLB_WAYS);
-    core->dtlb = (struct tlb_entry*) malloc(sizeof(struct tlb_entry) * TLB_SETS * TLB_WAYS);
-    for (i = 0; i < TLB_SETS * TLB_WAYS; i++)
+    proc->cores = (struct core*) calloc(sizeof(struct core), num_cores);
+    for (core_id = 0; core_id < num_cores; core_id++)
     {
-        // Set to invalid (unaligned) addresses so these don't match
-        core->itlb[i].virtual_address = INVALID_ADDR;
-        core->dtlb[i].virtual_address = INVALID_ADDR;
+        core = &proc->cores[core_id];
+        core->proc = proc;
+        core->itlb = (struct tlb_entry*) malloc(sizeof(struct tlb_entry) * TLB_SETS * TLB_WAYS);
+        core->dtlb = (struct tlb_entry*) malloc(sizeof(struct tlb_entry) * TLB_SETS * TLB_WAYS);
+        for (i = 0; i < TLB_SETS * TLB_WAYS; i++)
+        {
+            // Set to invalid (unaligned) addresses so these don't match
+            core->itlb[i].virtual_address = INVALID_ADDR;
+            core->dtlb[i].virtual_address = INVALID_ADDR;
+        }
+
+        core->threads = (struct thread*) calloc(sizeof(struct thread), threads_per_core);
+        for (thread_id = 0; thread_id < threads_per_core; thread_id++)
+        {
+            core->threads[thread_id].core = core;
+            core->threads[thread_id].id = core_id * threads_per_core + thread_id;
+            core->threads[thread_id].last_sync_load_addr = INVALID_ADDR;
+            core->threads[thread_id].enable_supervisor = true;
+            core->threads[thread_id].saved_trap_state[0].enable_supervisor = true;
+        }
+
+        core->trap_handler_pc = 0;
     }
 
-    core->total_threads = total_threads;
-    core->threads = (struct thread*) calloc(sizeof(struct thread), total_threads);
-    for (threadid = 0; threadid < total_threads; threadid++)
-    {
-        core->threads[threadid].core = core;
-        core->threads[threadid].id = threadid;
-        core->threads[threadid].last_sync_load_addr = INVALID_ADDR;
-        core->threads[threadid].enable_supervisor = true;
-        core->threads[threadid].saved_trap_state[0].enable_supervisor = true;
-    }
-
-    core->thread_enable_mask = 1;
-    core->crashed = false;
-    core->enable_tracing = false;
-    core->trap_handler_pc = 0;
-
+    proc->total_threads = threads_per_core * num_cores;
+    proc->threads_per_core = threads_per_core;
+    proc->num_cores = num_cores;
+    proc->crashed = false;
+    proc->thread_enable_mask = 1;
+    proc->enable_tracing = false;
     gettimeofday(&tv, NULL);
-    core->start_cycle_count = (uint32_t)(tv.tv_sec * 50000000 + tv.tv_usec * 50);
+    proc->start_cycle_count = (uint32_t)(tv.tv_sec * 50000000 + tv.tv_usec * 50);
 
-    return core;
+    return proc;
 }
 
-void enable_tracing(struct core *core)
+void enable_tracing(struct processor *proc)
 {
-    core->enable_tracing = true;
+    proc->enable_tracing = true;
 }
 
-int load_hex_file(struct core *core, const char *filename)
+int load_hex_file(struct processor *proc, const char *filename)
 {
     FILE *file;
     char line[16];
-    uint32_t *memptr = core->memory;
+    uint32_t *memptr = proc->memory;
 
     file = fopen(filename, "r");
     if (file == NULL)
@@ -271,7 +294,7 @@ int load_hex_file(struct core *core, const char *filename)
     while (fgets(line, sizeof(line), file))
     {
         *memptr++ = endian_swap32((uint32_t) strtoul(line, NULL, 16));
-        if ((uint32_t)((memptr - core->memory) * 4) >= core->memory_size)
+        if ((uint32_t)((memptr - proc->memory) * 4) >= proc->memory_size)
         {
             fprintf(stderr, "load_hex_file: hex file too big to fit in memory\n");
             return -1;
@@ -283,8 +306,8 @@ int load_hex_file(struct core *core, const char *filename)
     return 0;
 }
 
-void write_memory_to_file(const struct core *core, const char *filename, uint32_t base_address,
-                          uint32_t length)
+void write_memory_to_file(const struct processor *proc, const char *filename,
+                          uint32_t base_address, uint32_t length)
 {
     FILE *file;
 
@@ -295,7 +318,7 @@ void write_memory_to_file(const struct core *core, const char *filename, uint32_
         return;
     }
 
-    if (fwrite((int8_t*) core->memory + base_address, MIN(core->memory_size, length), 1, file) <= 0)
+    if (fwrite((int8_t*) proc->memory + base_address, MIN(proc->memory_size, length), 1, file) <= 0)
     {
         perror("write_memory_to_file: fwrite failed");
         return;
@@ -304,42 +327,56 @@ void write_memory_to_file(const struct core *core, const char *filename, uint32_
     fclose(file);
 }
 
-const void *get_memory_region_ptr(const struct core *core, uint32_t address, uint32_t length)
+const void *get_memory_region_ptr(const struct processor *proc, uint32_t address, uint32_t length)
 {
-    assert(length < core->memory_size);
+    assert(length < proc->memory_size);
 
     // Prevent overrun for bad address
-    if (address > core->memory_size || address + length > core->memory_size)
-        return core->memory;
+    if (address > proc->memory_size || address + length > proc->memory_size)
+        return proc->memory;
 
-    return ((const uint8_t*) core->memory) + address;
+    return ((const uint8_t*) proc->memory) + address;
 }
 
-void print_registers(const struct core *core, uint32_t thread_id)
+void print_registers(const struct processor *proc, uint32_t thread_id)
 {
-    print_thread_registers(&core->threads[thread_id]);
+    print_thread_registers(get_const_thread(proc, thread_id));
 }
 
-void enable_cosimulation(struct core *core)
+void enable_cosimulation(struct processor *proc)
 {
-    core->enable_cosim = true;
+    proc->enable_cosim = true;
 }
 
-void raise_interrupt(struct core *core, uint32_t int_bitmap)
+void raise_interrupt(struct processor *proc, uint32_t int_bitmap)
 {
     uint32_t thread_id;
+    uint32_t core_id;
+    struct core *core;
+    struct thread *thread;
 
-    for (thread_id = 0; thread_id < core->total_threads; thread_id++)
+    proc->interrupt_levels |= int_bitmap;
+    for (core_id = 0; core_id < proc->num_cores; core_id++)
     {
-        core->threads[thread_id].pending_interrupts |= int_bitmap;
-        try_to_dispatch_interrupt(&core->threads[thread_id]);
+        core = &proc->cores[core_id];
+        for (thread_id = 0; thread_id < proc->threads_per_core; thread_id++)
+        {
+            thread = &core->threads[thread_id];
+            thread->latched_interrupts |= int_bitmap;
+            try_to_dispatch_interrupt(thread);
+        }
     }
 }
 
-// Called when the verilog model in cosimulation indicates an interrupt.
-void cosim_interrupt(struct core *core, uint32_t thread_id, uint32_t pc)
+void clear_interrupt(struct processor *proc, uint32_t int_bitmap)
 {
-    struct thread *thread = &core->threads[thread_id];
+    proc->interrupt_levels &= ~int_bitmap;
+}
+
+// Called when the verilog model in cosimulation indicates an interrupt.
+void cosim_interrupt(struct processor *proc, uint32_t thread_id, uint32_t pc)
+{
+    struct thread *thread = get_thread(proc, thread_id);
 
     // This handles an edge case where cosimulation mismatches would occur
     // if an interrupt happened during a scatter store. Hardware does not
@@ -352,135 +389,165 @@ void cosim_interrupt(struct core *core, uint32_t thread_id, uint32_t pc)
         thread->subcycle = 0;
 
     thread->pc = pc;
-    thread->pending_interrupts |= INT_COSIM;
+    thread->latched_interrupts |= INT_COSIM;
     try_to_dispatch_interrupt(thread);
 }
 
-uint32_t get_total_threads(const struct core *core)
+uint32_t get_total_threads(const struct processor *proc)
 {
-    return core->total_threads;
+    return proc->total_threads;
 }
 
-bool core_halted(const struct core *core)
+bool is_proc_halted(const struct processor *proc)
 {
-    return core->thread_enable_mask == 0 || core->crashed;
+    return proc->thread_enable_mask == 0 || proc->crashed;
 }
 
-bool stopped_on_fault(const struct core *core)
+bool is_stopped_on_fault(const struct processor *proc)
 {
-    return core->crashed;
+    return proc->crashed;
 }
 
-bool execute_instructions(struct core *core, uint32_t thread_id, uint64_t total_instructions)
+bool execute_instructions(struct processor *proc, uint32_t thread_id,
+                          uint64_t total_instructions)
 {
     uint64_t instruction_count;
-    uint32_t thread;
+    uint32_t local_thread_idx;
+    uint32_t core_id;
+    struct core *core;
 
-    core->single_stepping = false;
+    proc->single_stepping = false;
     for (instruction_count = 0; instruction_count < total_instructions; instruction_count++)
     {
-        if (core->thread_enable_mask == 0)
+        if (proc->thread_enable_mask == 0)
         {
-            printf("struct thread enable mask is now zero\n");
+            printf("thread enable mask is now zero\n");
             return false;
         }
 
-        if (core->crashed)
+        if (proc->crashed)
             return false;
 
         if (thread_id == ALL_THREADS)
         {
             // Cycle through threads round-robin
-            for (thread = 0; thread < core->total_threads; thread++)
+            for (core_id = 0; core_id < proc->num_cores; core_id++)
             {
-                if (core->thread_enable_mask & (1 << thread))
+                core = &proc->cores[core_id];
+                for (local_thread_idx = 0; local_thread_idx < proc->threads_per_core;
+                        local_thread_idx++)
                 {
-                    if (!execute_instruction(&core->threads[thread]))
-                        return false;  // Hit breakpoint
+                    if (proc->thread_enable_mask & (1 << local_thread_idx))
+                    {
+                        if (!execute_instruction(&core->threads[local_thread_idx]))
+                            return false;  // Hit breakpoint
+                    }
                 }
             }
         }
         else
         {
-            if (!execute_instruction(&core->threads[thread_id]))
+            if (!execute_instruction(get_thread(proc, thread_id)))
                 return false;  // Hit breakpoint
         }
 
-        timer_tick(core);
+        timer_tick(proc);
     }
 
     return true;
 }
 
-void single_step(struct core *core, uint32_t thread_id)
+void dbg_single_step(struct processor *proc, uint32_t thread_id)
 {
-    core->single_stepping = true;
-    execute_instruction(&core->threads[thread_id]);
-    timer_tick(core);
+    proc->single_stepping = true;
+    execute_instruction(get_thread(proc, thread_id));
+    timer_tick(proc);
 }
 
-uint32_t get_pc(const struct core *core, uint32_t thread_id)
+uint32_t dbg_get_scalar_reg(const struct processor *proc, uint32_t thread_id,
+                            uint32_t reg_id)
 {
-    return core->threads[thread_id].pc;
+    return get_scalar_reg(get_const_thread(proc, thread_id), reg_id);
 }
 
-uint32_t get_scalar_register(const struct core *core, uint32_t thread_id, uint32_t reg_id)
+void dbg_set_scalar_reg(struct processor *proc, uint32_t thread_id,
+                        uint32_t reg_id, uint32_t value)
 {
-    return get_thread_scalar_reg(&core->threads[thread_id], reg_id);
+    set_scalar_reg(get_thread(proc, thread_id), reg_id, value);
 }
 
-uint32_t get_vector_register(const struct core *core, uint32_t thread_id, uint32_t reg_id, uint32_t lane)
+void dbg_get_vector_reg(const struct processor *proc, uint32_t thread_id,
+                        uint32_t reg_id, uint32_t *values)
 {
-    return core->threads[thread_id].vector_reg[reg_id][lane];
+    memcpy(values, get_const_thread(proc, thread_id)->vector_reg[reg_id],
+           NUM_VECTOR_LANES * sizeof(int));
 }
 
-uint32_t debug_read_memory_byte(const struct core *core, uint32_t address)
+void dbg_set_vector_reg(struct processor *proc, uint32_t thread_id,
+                        uint32_t reg_id, uint32_t *values)
 {
-    return ((uint8_t*)core->memory)[address];
+    memcpy(get_thread(proc, thread_id)->vector_reg[reg_id], values,
+           NUM_VECTOR_LANES * sizeof(int));
 }
 
-void debug_write_memory_byte(const struct core *core, uint32_t address, uint8_t byte)
+// XXX This does not perform address translation.
+// We can't handle TLB misses properly when the fault is caued by debugger.
+// Should either do a best effort, returning nothing if the TLB entry is missing,
+// or return an error if memory translation is enabled.
+uint32_t dbg_read_memory_byte(const struct processor *proc, uint32_t address)
 {
-    ((uint8_t*)core->memory)[address] = byte;
+    if (address >= proc->memory_size)
+        return 0xff;
+
+    return ((uint8_t*)proc->memory)[address];
 }
 
-int set_breakpoint(struct core *core, uint32_t pc)
+void dbg_write_memory_byte(const struct processor *proc, uint32_t address, uint8_t byte)
 {
-    struct breakpoint *breakpoint = lookup_breakpoint(core, pc);
+    if (address < proc->memory_size)
+        ((uint8_t*)proc->memory)[address] = byte;
+}
+
+int dbg_set_breakpoint(struct processor *proc, uint32_t pc)
+{
+    struct breakpoint *breakpoint = lookup_breakpoint(proc, pc);
     if (breakpoint != NULL)
     {
         printf("already has a breakpoint at address %x\n", pc);
         return -1;
     }
 
-    if (pc >= core->memory_size || (pc & 3) != 0)
+    if (pc >= proc->memory_size || (pc & 3) != 0)
     {
         printf("invalid breakpoint address %x\n", pc);
         return -1;
     }
 
     breakpoint = (struct breakpoint*) calloc(sizeof(struct breakpoint), 1);
-    breakpoint->next = core->breakpoints;
-    core->breakpoints = breakpoint;
+    breakpoint->next = proc->breakpoints;
+    proc->breakpoints = breakpoint;
     breakpoint->address = pc;
-    breakpoint->original_instruction = core->memory[pc / 4];
+    breakpoint->original_instruction = proc->memory[pc / 4];
     if (breakpoint->original_instruction == BREAKPOINT_INST)
         breakpoint->original_instruction = INSTRUCTION_NOP;	// Avoid infinite loop
 
-    core->memory[pc / 4] = BREAKPOINT_INST;
+    proc->memory[pc / 4] = BREAKPOINT_INST;
     return 0;
 }
 
-int clear_breakpoint(struct core *core, uint32_t pc)
+int dbg_clear_breakpoint(struct processor *proc, uint32_t pc)
 {
     struct breakpoint **link;
+    struct breakpoint *breakpoint;
 
-    for (link = &core->breakpoints; *link; link = &(*link)->next)
+    for (link = &proc->breakpoints; *link; link = &(*link)->next)
     {
-        if ((*link)->address == pc)
+        breakpoint = *link;
+        if (breakpoint->address == pc)
         {
-            core->memory[pc / 4] = (*link)->original_instruction;
-            *link = (*link)->next;
+            proc->memory[pc / 4] = breakpoint->original_instruction;
+            *link = breakpoint->next;
+            free(breakpoint);
             return 0;
         }
     }
@@ -488,17 +555,17 @@ int clear_breakpoint(struct core *core, uint32_t pc)
     return -1; // Not found
 }
 
-void set_stop_on_fault(struct core *core, bool stop_on_fault)
+void dbg_set_stop_on_fault(struct processor *proc, bool stop_on_fault)
 {
-    core->stop_on_fault = stop_on_fault;
+    proc->stop_on_fault = stop_on_fault;
 }
 
-void dump_instruction_stats(struct core *core)
+void dump_instruction_stats(struct processor *proc)
 {
-    printf("%" PRId64 " total instructions\n", core->total_instructions);
+    printf("%" PRId64 " total instructions\n", proc->total_instructions);
 #ifdef DUMP_INSTRUCTION_STATS
-#define PRINT_STAT(name) printf("%s %" PRId64 " %.4g%%\n", #name, core->stat ## name, \
-		(double) core->stat ## name/ core->total_instructions * 100);
+#define PRINT_STAT(name) printf("%s %" PRId64 " %.4g%%\n", #name, proc->stat ## name, \
+		(double) proc->stat ## name / proc->total_instructions * 100);
 
     PRINT_STAT(vector_inst);
     PRINT_STAT(load_inst);
@@ -509,6 +576,19 @@ void dump_instruction_stats(struct core *core)
 
 #undef PRINT_STAT
 #endif
+}
+
+static inline const struct thread *get_const_thread(const struct processor
+        *proc, uint32_t thread_id)
+{
+    return &proc->cores[thread_id / proc->threads_per_core].threads[
+               thread_id % proc->threads_per_core];
+}
+
+static inline struct thread *get_thread(struct processor *proc, uint32_t thread_id)
+{
+    return &proc->cores[thread_id / proc->threads_per_core].threads[
+               thread_id % proc->threads_per_core];
 }
 
 static void print_thread_registers(const struct thread *thread)
@@ -552,7 +632,7 @@ static void print_thread_registers(const struct thread *thread)
     }
 }
 
-static uint32_t get_thread_scalar_reg(const struct thread *thread, uint32_t reg)
+static uint32_t get_scalar_reg(const struct thread *thread, uint32_t reg)
 {
     if (reg == PC_REG)
         return thread->pc;
@@ -562,11 +642,14 @@ static uint32_t get_thread_scalar_reg(const struct thread *thread, uint32_t reg)
 
 static void set_scalar_reg(struct thread *thread, uint32_t reg, uint32_t value)
 {
-    if (thread->core->enable_tracing)
+    if (thread->core->proc->enable_tracing)
         printf("%08x [th %d] s%d <= %08x\n", thread->pc - 4, thread->id, reg, value);
 
-    if (thread->core->enable_cosim)
-        cosim_check_set_scalar_reg(thread->core, thread->pc - 4, reg, value);
+    if (thread->core->proc->enable_cosim)
+    {
+        cosim_check_set_scalar_reg(thread->core->proc, thread->pc - 4,
+                                   reg, value);
+    }
 
     if (reg == PC_REG)
         thread->pc = value;
@@ -574,11 +657,12 @@ static void set_scalar_reg(struct thread *thread, uint32_t reg, uint32_t value)
         thread->scalar_reg[reg] = value;
 }
 
-static void set_vector_reg(struct thread *thread, uint32_t reg, uint32_t mask, uint32_t *values)
+static void set_vector_reg(struct thread *thread, uint32_t reg, uint32_t mask,
+                           uint32_t *values)
 {
     int lane;
 
-    if (thread->core->enable_tracing)
+    if (thread->core->proc->enable_tracing)
     {
         printf("%08x [th %d] v%d{%04x} <= ", thread->pc - 4, thread->id, reg,
                mask & 0xffff);
@@ -588,8 +672,8 @@ static void set_vector_reg(struct thread *thread, uint32_t reg, uint32_t mask, u
         printf("\n");
     }
 
-    if (thread->core->enable_cosim)
-        cosim_check_set_vector_reg(thread->core, thread->pc - 4, reg, mask, values);
+    if (thread->core->proc->enable_cosim)
+        cosim_check_set_vector_reg(thread->core->proc, thread->pc - 4, reg, mask, values);
 
     for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
     {
@@ -602,7 +686,7 @@ static void invalidate_sync_address(struct core *core, uint32_t address)
 {
     uint32_t thread_id;
 
-    for (thread_id = 0; thread_id < core->total_threads; thread_id++)
+    for (thread_id = 0; thread_id < core->proc->total_threads; thread_id++)
     {
         if (core->threads[thread_id].last_sync_load_addr == address / CACHE_LINE_LENGTH)
             core->threads[thread_id].last_sync_load_addr = INVALID_ADDR;
@@ -611,10 +695,11 @@ static void invalidate_sync_address(struct core *core, uint32_t address)
 
 static void try_to_dispatch_interrupt(struct thread *thread)
 {
+    uint32_t pending = get_pending_interrupts(thread);
     if (!thread->enable_interrupt)
         return;
 
-    if ((thread->pending_interrupts & thread->interrupt_mask) != 0)
+    if ((pending & thread->interrupt_mask) != 0)
     {
         // Unlike exceptions, an interrupt saves the PC of the *next* instruction,
         // rather than the current one, but only if a multicycle instruction is
@@ -626,24 +711,31 @@ static void try_to_dispatch_interrupt(struct thread *thread)
     }
 }
 
+static uint32_t get_pending_interrupts(struct thread *thread)
+{
+    return (thread->core->is_level_triggered & thread->core->proc->interrupt_levels)
+           | (~thread->core->is_level_triggered & thread->latched_interrupts);
+}
+
 static void raise_trap(struct thread *thread, uint32_t trap_address, enum trap_type type,
                        bool is_store, bool is_data_cache)
 {
-    if (thread->core->enable_tracing)
+    if (thread->core->proc->enable_tracing)
     {
         printf("%08x [th %d] trap %d store %d cache %d %08x\n",
                thread->pc - 4, thread->id, type, is_store, is_data_cache,
                trap_address);
     }
 
-    if ((thread->core->stop_on_fault || thread->core->trap_handler_pc == 0)
+    if ((thread->core->proc->stop_on_fault || thread->core->trap_handler_pc == 0)
             && type != TT_TLB_MISS
             && type != TT_INTERRUPT
             && type != TT_SYSCALL)
     {
-        printf("Thread %d caught fault %d @%08x\n", thread->id, type, thread->pc - 4);
+        thread->pc -= 4;    // reset PC to faulting instruction
+        printf("Thread %d caught fault %d @%08x\n", thread->id, type, thread->pc);
         print_thread_registers(thread);
-        thread->core->crashed = true;
+        thread->core->proc->crashed = true;
         return;
     }
 
@@ -653,7 +745,7 @@ static void raise_trap(struct thread *thread, uint32_t trap_address, enum trap_t
 
     // Save current trap information
     thread->saved_trap_state[0].trap_cause = type | (is_store ? 0x10ul : 0)
-        | (is_data_cache ? 0x20ul : 0);
+            | (is_data_cache ? 0x20ul : 0);
 
     // Kludge
     // In most cases, the PC points to the next instruction after the one
@@ -689,8 +781,9 @@ static void raise_trap(struct thread *thread, uint32_t trap_address, enum trap_t
     thread->enable_supervisor = true;
 }
 
-// Translate addresses using the translation lookaside buffer. Raise faults
-// if necessary.
+// Translate addresses using the translation lookaside buffer. Returns true
+// if there was a valid translation, false otherwise (in the latter case, it
+// will also raise a trap or print an error as a side effect).
 static bool translate_address(struct thread *thread, uint32_t virtual_address,
                               uint32_t *out_physical_address, bool is_store,
                               bool is_data_access)
@@ -701,14 +794,14 @@ static bool translate_address(struct thread *thread, uint32_t virtual_address,
 
     if (!thread->enable_mmu)
     {
-        if (virtual_address >= thread->core->memory_size && virtual_address < 0xffff0000)
+        if (virtual_address >= thread->core->proc->memory_size && virtual_address < 0xffff0000)
         {
             // This isn't an actual fault supported by the hardware, but a debugging
             // aid only available in the emulator.
             printf("Memory access out of range %08x, pc %08x (MMU not enabled)\n",
                    virtual_address, thread->pc - 4);
             print_thread_registers(thread);
-            thread->core->crashed = true;
+            thread->core->proc->crashed = true;
             return false;
         }
 
@@ -757,14 +850,14 @@ static bool translate_address(struct thread *thread, uint32_t virtual_address,
             *out_physical_address = ROUND_TO_PAGE(set_entries[way].phys_addr_and_flags)
                                     | PAGE_OFFSET(virtual_address);
 
-            if (*out_physical_address >= thread->core->memory_size && *out_physical_address < 0xffff0000)
+            if (*out_physical_address >= thread->core->proc->memory_size && *out_physical_address < 0xffff0000)
             {
                 // This isn't an actual fault supported by the hardware, but a debugging
                 // aid only available in the emulator.
                 printf("Translated physical address out of range. va %08x pa %08x pc %08x\n",
                        virtual_address, *out_physical_address, thread->pc - 4);
                 print_thread_registers(thread);
-                thread->core->crashed = true;
+                thread->core->proc->crashed = true;
                 return false;
             }
 
@@ -876,11 +969,11 @@ static bool is_compare_op(uint32_t op)
     return (op >= OP_CMPEQ_I && op <= OP_CMPLE_U) || (op >= OP_CMPGT_F && op <= OP_CMPNE_F);
 }
 
-static struct breakpoint *lookup_breakpoint(struct core *core, uint32_t pc)
+static struct breakpoint *lookup_breakpoint(struct processor *proc, uint32_t pc)
 {
     struct breakpoint *breakpoint;
 
-    for (breakpoint = core->breakpoints; breakpoint; breakpoint =
+    for (breakpoint = proc->breakpoints; breakpoint; breakpoint =
                 breakpoint->next)
     {
         if (breakpoint->address == pc)
@@ -910,7 +1003,7 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
     if (op == OP_GETLANE)
     {
         set_scalar_reg(thread, destreg, thread->vector_reg[op1reg][NUM_VECTOR_LANES - 1
-                       - (get_thread_scalar_reg(thread, op2reg) & 0xf)]);
+                       - (get_scalar_reg(thread, op2reg) & 0xf)]);
     }
     else if (is_compare_op(op))
     {
@@ -918,8 +1011,8 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
         switch (fmt)
         {
             case FMT_RA_SS:
-                result = scalar_arithmetic_op(op, get_thread_scalar_reg(thread, op1reg),
-                                              get_thread_scalar_reg(thread, op2reg)) ? 0xffff : 0;
+                result = scalar_arithmetic_op(op, get_scalar_reg(thread, op1reg),
+                                              get_scalar_reg(thread, op2reg)) ? 0xffff : 0;
                 break;
 
             case FMT_RA_VS:
@@ -928,7 +1021,7 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
 
                 // Vector/Scalar operation
                 // Pack compare results in low 16 bits of scalar register
-                uint32_t scalar_value = get_thread_scalar_reg(thread, op2reg);
+                uint32_t scalar_value = get_scalar_reg(thread, op2reg);
                 for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
                 {
                     result >>= 1;
@@ -962,8 +1055,8 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
     }
     else if (fmt == FMT_RA_SS)
     {
-        uint32_t result = scalar_arithmetic_op(op, get_thread_scalar_reg(thread, op1reg),
-                                               get_thread_scalar_reg(thread, op2reg));
+        uint32_t result = scalar_arithmetic_op(op, get_scalar_reg(thread, op1reg),
+                                               get_scalar_reg(thread, op2reg));
         set_scalar_reg(thread, destreg, result);
     }
     else
@@ -977,7 +1070,7 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
         {
             case FMT_RA_VS_M:
             case FMT_RA_VV_M:
-                mask = get_thread_scalar_reg(thread, maskreg);
+                mask = get_scalar_reg(thread, maskreg);
                 break;
 
             case FMT_RA_VS:
@@ -1001,7 +1094,7 @@ static void execute_register_arith_inst(struct thread *thread, uint32_t instruct
         else if (fmt == FMT_RA_VS || fmt == FMT_RA_VS_M)
         {
             // Vector/Scalar operands
-            uint32_t scalar_value = get_thread_scalar_reg(thread, op2reg);
+            uint32_t scalar_value = get_scalar_reg(thread, op2reg);
             for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
             {
                 result[lane] = scalar_arithmetic_op(op, thread->vector_reg[op1reg][lane],
@@ -1067,7 +1160,7 @@ static void execute_immediate_arith_inst(struct thread *thread, uint32_t instruc
             case FMT_IMM_SS:
             case FMT_IMM_VS:
             case FMT_IMM_VS_M:
-                result = scalar_arithmetic_op(op, get_thread_scalar_reg(thread, op1reg),
+                result = scalar_arithmetic_op(op, get_scalar_reg(thread, op1reg),
                                               imm_value) ? 0xffff : 0;
                 break;
 
@@ -1080,7 +1173,7 @@ static void execute_immediate_arith_inst(struct thread *thread, uint32_t instruc
     }
     else if (fmt == FMT_IMM_SS)
     {
-        uint32_t result = scalar_arithmetic_op(op, get_thread_scalar_reg(thread, op1reg),
+        uint32_t result = scalar_arithmetic_op(op, get_scalar_reg(thread, op1reg),
                                                imm_value);
         set_scalar_reg(thread, destreg, result);
     }
@@ -1095,7 +1188,7 @@ static void execute_immediate_arith_inst(struct thread *thread, uint32_t instruc
         {
             case FMT_IMM_VV_M:
             case FMT_IMM_VS_M:
-                mask = get_thread_scalar_reg(thread, maskreg);
+                mask = get_scalar_reg(thread, maskreg);
                 break;
 
             case FMT_IMM_VV:
@@ -1118,7 +1211,7 @@ static void execute_immediate_arith_inst(struct thread *thread, uint32_t instruc
         }
         else
         {
-            operand1 = get_thread_scalar_reg(thread, op1reg);
+            operand1 = get_scalar_reg(thread, op1reg);
             for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
                 result[lane] = scalar_arithmetic_op(op, operand1, imm_value);
         }
@@ -1140,7 +1233,7 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
     uint32_t value;
     uint32_t access_size;
 
-    virtual_address = get_thread_scalar_reg(thread, ptrreg) + offset;
+    virtual_address = get_scalar_reg(thread, ptrreg) + offset;
 
     switch (op)
     {
@@ -1175,7 +1268,7 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
         printf("%s Invalid device access %08x, pc %08x\n", is_load ? "Load" : "Store",
                virtual_address, thread->pc - 4);
         print_thread_registers(thread);
-        thread->core->crashed = true;
+        thread->core->proc->crashed = true;
         return;
     }
 
@@ -1187,28 +1280,28 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
                 if (is_device_access)
                     value = read_device_register(physical_address);
                 else
-                    value = (uint32_t) *UINT32_PTR(thread->core->memory, physical_address);
+                    value = (uint32_t) *UINT32_PTR(thread->core->proc->memory, physical_address);
 
                 break;
 
             case MEM_BYTE:
-                value = (uint32_t) *UINT8_PTR(thread->core->memory, physical_address);
+                value = (uint32_t) *UINT8_PTR(thread->core->proc->memory, physical_address);
                 break;
 
             case MEM_BYTE_SEXT:
-                value = (uint32_t)(int32_t) *INT8_PTR(thread->core->memory, physical_address);
+                value = (uint32_t)(int32_t) *INT8_PTR(thread->core->proc->memory, physical_address);
                 break;
 
             case MEM_SHORT:
-                value = (uint32_t) *UINT16_PTR(thread->core->memory, physical_address);
+                value = (uint32_t) *UINT16_PTR(thread->core->proc->memory, physical_address);
                 break;
 
             case MEM_SHORT_EXT:
-                value = (uint32_t)(int32_t) *INT16_PTR(thread->core->memory, physical_address);
+                value = (uint32_t)(int32_t) *INT16_PTR(thread->core->proc->memory, physical_address);
                 break;
 
             case MEM_SYNC:
-                value = *UINT32_PTR(thread->core->memory, physical_address);
+                value = *UINT32_PTR(thread->core->proc->memory, physical_address);
                 thread->last_sync_load_addr = physical_address / CACHE_LINE_LENGTH;
                 break;
 
@@ -1226,7 +1319,7 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
     else
     {
         // Store
-        uint32_t value_to_store = get_thread_scalar_reg(thread, destsrcreg);
+        uint32_t value_to_store = get_scalar_reg(thread, destsrcreg);
 
         // Some instruction don't update memory, for example: a synchronized store
         // that fails or writes to device memory. This tracks whether they
@@ -1236,13 +1329,13 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
         {
             case MEM_BYTE:
             case MEM_BYTE_SEXT:
-                *UINT8_PTR(thread->core->memory, physical_address) = (uint8_t) value_to_store;
+                *UINT8_PTR(thread->core->proc->memory, physical_address) = (uint8_t) value_to_store;
                 did_write = true;
                 break;
 
             case MEM_SHORT:
             case MEM_SHORT_EXT:
-                *UINT16_PTR(thread->core->memory, physical_address) = (uint16_t) value_to_store;
+                *UINT16_PTR(thread->core->proc->memory, physical_address) = (uint16_t) value_to_store;
                 did_write = true;
                 break;
 
@@ -1251,12 +1344,12 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
                 {
                     // IO address range
                     if (physical_address == REG_THREAD_RESUME)
-                        thread->core->thread_enable_mask |= value_to_store
-                                                            & ((1ull << thread->core->total_threads) - 1);
+                        thread->core->proc->thread_enable_mask |= value_to_store
+                                & ((1ull << thread->core->proc->total_threads) - 1);
                     else if (physical_address == REG_THREAD_HALT)
-                        thread->core->thread_enable_mask &= ~value_to_store;
+                        thread->core->proc->thread_enable_mask &= ~value_to_store;
                     else if (physical_address == REG_TIMER_INT)
-                        thread->core->current_timer_count = value_to_store;
+                        thread->core->proc->current_timer_count = value_to_store;
                     else
                         write_device_register(physical_address, value_to_store);
 
@@ -1264,7 +1357,7 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
                     return;
                 }
 
-                *UINT32_PTR(thread->core->memory, physical_address) = value_to_store;
+                *UINT32_PTR(thread->core->proc->memory, physical_address) = value_to_store;
                 did_write = true;
                 break;
 
@@ -1280,7 +1373,7 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
                     // a side effect), set the value explicitly here.
                     thread->scalar_reg[destsrcreg] = 1;
 
-                    *UINT32_PTR(thread->core->memory, physical_address) = value_to_store;
+                    *UINT32_PTR(thread->core->proc->memory, physical_address) = value_to_store;
                     did_write = true;
                 }
                 else
@@ -1300,15 +1393,15 @@ static void execute_scalar_load_store_inst(struct thread *thread, uint32_t instr
         if (did_write)
         {
             invalidate_sync_address(thread->core, physical_address);
-            if (thread->core->enable_tracing)
+            if (thread->core->proc->enable_tracing)
             {
                 printf("%08x [th %d] memory store size %d %08x %02x\n", thread->pc - 4,
                        thread->id, access_size, virtual_address, value_to_store);
             }
 
-            if (thread->core->enable_cosim)
+            if (thread->core->proc->enable_cosim)
             {
-                cosim_check_scalar_store(thread->core, thread->pc - 4, virtual_address, access_size,
+                cosim_check_scalar_store(thread->core->proc, thread->pc - 4, virtual_address, access_size,
                                          value_to_store);
             }
         }
@@ -1340,7 +1433,7 @@ static void execute_block_load_store_inst(struct thread *thread, uint32_t instru
             break;
 
         case MEM_BLOCK_VECTOR_MASK:
-            mask = get_thread_scalar_reg(thread, maskreg);
+            mask = get_scalar_reg(thread, maskreg);
             offset = extract_signed_bits(instruction, 15, 10);
             break;
 
@@ -1348,7 +1441,7 @@ static void execute_block_load_store_inst(struct thread *thread, uint32_t instru
             assert(0);
     }
 
-    virtual_address = get_thread_scalar_reg(thread, ptrreg) + offset;
+    virtual_address = get_scalar_reg(thread, ptrreg) + offset;
 
     // Check alignment
     if ((virtual_address & (NUM_VECTOR_LANES * 4 - 1)) != 0)
@@ -1361,7 +1454,7 @@ static void execute_block_load_store_inst(struct thread *thread, uint32_t instru
     if (!translate_address(thread, virtual_address, &physical_address, !is_load, true))
         return; // fault raised, bypass other side effects
 
-    block_ptr = UINT32_PTR(thread->core->memory, physical_address);
+    block_ptr = UINT32_PTR(thread->core->proc->memory, physical_address);
     if (is_load)
     {
         uint32_t load_value[NUM_VECTOR_LANES];
@@ -1377,14 +1470,14 @@ static void execute_block_load_store_inst(struct thread *thread, uint32_t instru
         if ((mask & 0xffff) == 0)
             return;	// Hardware ignores block stores with a mask of zero
 
-        if (thread->core->enable_tracing)
+        if (thread->core->proc->enable_tracing)
         {
             printf("%08x [th %d] write_mem_block %08x\n", thread->pc - 4, thread->id,
                    virtual_address);
         }
 
-        if (thread->core->enable_cosim)
-            cosim_check_vector_store(thread->core, thread->pc - 4, virtual_address, mask, store_value);
+        if (thread->core->proc->enable_cosim)
+            cosim_check_vector_store(thread->core->proc, thread->pc - 4, virtual_address, mask, store_value);
 
         for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
         {
@@ -1421,7 +1514,7 @@ static void execute_scatter_gather_inst(struct thread *thread, uint32_t instruct
             break;
 
         case MEM_SCGATH_MASK:
-            mask = get_thread_scalar_reg(thread, maskreg);
+            mask = get_scalar_reg(thread, maskreg);
             offset = extract_signed_bits(instruction, 15, 10);
             break;
 
@@ -1445,25 +1538,25 @@ static void execute_scatter_gather_inst(struct thread *thread, uint32_t instruct
         uint32_t load_value[NUM_VECTOR_LANES];
         memset(load_value, 0, NUM_VECTOR_LANES * sizeof(uint32_t));
         if (mask & (1 << lane))
-            load_value[lane] = *UINT32_PTR(thread->core->memory, physical_address);
+            load_value[lane] = *UINT32_PTR(thread->core->proc->memory, physical_address);
 
         set_vector_reg(thread, destsrcreg, mask & (1 << lane), load_value);
     }
     else if (mask & (1 << lane))
     {
-        if (thread->core->enable_tracing)
+        if (thread->core->proc->enable_tracing)
         {
             printf("%08x [th %d] store_scatter (%d) %08x %08x\n", thread->pc - 4,
                    thread->id, thread->subcycle, virtual_address,
                    thread->vector_reg[destsrcreg][lane]);
         }
 
-        *UINT32_PTR(thread->core->memory, physical_address)
+        *UINT32_PTR(thread->core->proc->memory, physical_address)
             = thread->vector_reg[destsrcreg][lane];
         invalidate_sync_address(thread->core, physical_address);
-        if (thread->core->enable_cosim)
+        if (thread->core->proc->enable_cosim)
         {
-            cosim_check_scalar_store(thread->core, thread->pc - 4, virtual_address, 4,
+            cosim_check_scalar_store(thread->core->proc, thread->pc - 4, virtual_address, 4,
                                      thread->vector_reg[destsrcreg][lane]);
         }
     }
@@ -1531,7 +1624,7 @@ static void execute_control_register_inst(struct thread *thread, uint32_t instru
                 struct timeval tv;
                 gettimeofday(&tv, NULL);
                 value = (uint32_t)(tv.tv_sec * 50000000 + tv.tv_usec * 50)
-                        - thread->core->start_cycle_count;
+                        - thread->core->proc->start_cycle_count;
                 break;
             }
 
@@ -1552,7 +1645,7 @@ static void execute_control_register_inst(struct thread *thread, uint32_t instru
                 break;
 
             case CR_INTERRUPT_PENDING:
-                value = thread->pending_interrupts;
+                value = get_pending_interrupts(thread);
                 break;
         }
 
@@ -1568,7 +1661,7 @@ static void execute_control_register_inst(struct thread *thread, uint32_t instru
         }
 
         // Store
-        uint32_t value = get_thread_scalar_reg(thread, dst_src_reg);
+        uint32_t value = get_scalar_reg(thread, dst_src_reg);
         switch (cr_index)
         {
             case CR_TRAP_HANDLER:
@@ -1626,7 +1719,11 @@ static void execute_control_register_inst(struct thread *thread, uint32_t instru
                 break;
 
             case CR_INTERRUPT_ACK:
-                thread->pending_interrupts &= ~value;
+                thread->latched_interrupts &= ~value;
+                break;
+
+            case CR_INTERRUPT_TRIGGER:
+                thread->core->is_level_triggered = value;
                 break;
         }
     }
@@ -1682,15 +1779,15 @@ static void execute_branch_inst(struct thread *thread, uint32_t instruction)
     switch (extract_unsigned_bits(instruction, 25, 3))
     {
         case BRANCH_ALL:
-            branch_taken = (get_thread_scalar_reg(thread, src_reg) & 0xffff) == 0xffff;
+            branch_taken = (get_scalar_reg(thread, src_reg) & 0xffff) == 0xffff;
             break;
 
         case BRANCH_ZERO:
-            branch_taken = get_thread_scalar_reg(thread, src_reg) == 0;
+            branch_taken = get_scalar_reg(thread, src_reg) == 0;
             break;
 
         case BRANCH_NOT_ZERO:
-            branch_taken = get_thread_scalar_reg(thread, src_reg) != 0;
+            branch_taken = get_scalar_reg(thread, src_reg) != 0;
             break;
 
         case BRANCH_ALWAYS:
@@ -1703,12 +1800,12 @@ static void execute_branch_inst(struct thread *thread, uint32_t instruction)
             break;
 
         case BRANCH_NOT_ALL:
-            branch_taken = (get_thread_scalar_reg(thread, src_reg) & 0xffff) != 0xffff;
+            branch_taken = (get_scalar_reg(thread, src_reg) & 0xffff) != 0xffff;
             break;
 
         case BRANCH_CALL_REGISTER:
             set_scalar_reg(thread, LINK_REG, thread->pc);
-            thread->pc = get_thread_scalar_reg(thread, src_reg);
+            thread->pc = get_scalar_reg(thread, src_reg);
             return; // Short circuit, since the source register is the dest
 
         case BRANCH_ERET:
@@ -1762,7 +1859,7 @@ static void execute_cache_control_inst(struct thread *thread, uint32_t instructi
             // will do that as a side effect.
             uint32_t offset = extract_signed_bits(instruction, 15, 10);
             uint32_t physical_address;
-            translate_address(thread, get_thread_scalar_reg(thread, ptr_reg) + offset,
+            translate_address(thread, get_scalar_reg(thread, ptr_reg) + offset,
                               &physical_address, false, true);
             break;
         }
@@ -1770,9 +1867,9 @@ static void execute_cache_control_inst(struct thread *thread, uint32_t instructi
         case CC_DTLB_INSERT:
         case CC_ITLB_INSERT:
         {
-            uint32_t virtual_address = ROUND_TO_PAGE(get_thread_scalar_reg(thread, ptr_reg));
+            uint32_t virtual_address = ROUND_TO_PAGE(get_scalar_reg(thread, ptr_reg));
             uint32_t phys_addr_reg = extract_unsigned_bits(instruction, 5, 5);
-            uint32_t phys_addr_and_flags = get_thread_scalar_reg(thread, phys_addr_reg);
+            uint32_t phys_addr_and_flags = get_scalar_reg(thread, phys_addr_reg);
             uint32_t *way_ptr;
             struct tlb_entry *tlb;
 
@@ -1823,7 +1920,7 @@ static void execute_cache_control_inst(struct thread *thread, uint32_t instructi
         case CC_INVALIDATE_TLB:
         {
             uint32_t offset = extract_signed_bits(instruction, 15, 10);
-            uint32_t virtual_address = ROUND_TO_PAGE(get_thread_scalar_reg(thread, ptr_reg) + offset);
+            uint32_t virtual_address = ROUND_TO_PAGE(get_scalar_reg(thread, ptr_reg) + offset);
             uint32_t tlb_index = ((virtual_address / PAGE_SIZE) % TLB_SETS) * TLB_WAYS;
 
             for (way = 0; way < TLB_WAYS; way++)
@@ -1875,8 +1972,8 @@ static bool execute_instruction(struct thread *thread)
 
     // XXX if stop on fault was enabled, should return false
 
-    instruction = *UINT32_PTR(thread->core->memory, physical_pc);
-    thread->core->total_instructions++;
+    instruction = *UINT32_PTR(thread->core->proc->memory, physical_pc);
+    thread->core->proc->total_instructions++;
 
 restart:
     if ((instruction & 0xe0000000) == 0xc0000000)
@@ -1885,18 +1982,20 @@ restart:
     {
         if (instruction == BREAKPOINT_INST)
         {
-            struct breakpoint *breakpoint = lookup_breakpoint(thread->core, thread->pc - 4);
+            struct breakpoint *breakpoint = lookup_breakpoint(thread->core->proc, thread->pc - 4);
             if (breakpoint == NULL)
             {
-                // We use a special instruction to trigger breakpoint lookup
-                // as an optimization to avoid doing a lookup on every
-                // instruction. In this case, the special instruction was
-                // already in the program, so raise a fault.
+                // We use a special instruction (which is invalid) to trigger
+                // breakpoint lookup. This is an optimization to avoid doing
+                // a lookup on every instruction. In this case, the special
+                // instruction was already in the program, so raise a fault.
                 raise_trap(thread, 0, TT_ILLEGAL_INSTRUCTION, false, false);
                 return true;
             }
 
-            if (breakpoint->restart || thread->core->single_stepping)
+            // The restart flag indicates we must step past a breakpoint we
+            // just hit. Substitute the original instruction.
+            if (breakpoint->restart || thread->core->proc->single_stepping)
             {
                 breakpoint->restart = false;
                 instruction = breakpoint->original_instruction;
@@ -1907,6 +2006,7 @@ restart:
             {
                 // Hit a breakpoint
                 breakpoint->restart = true;
+                thread->pc -= 4;    // Reset PC to instruction that trapped.
                 return false;
             }
         }
@@ -1932,11 +2032,11 @@ restart:
     return true;
 }
 
-static void timer_tick(struct core *core)
+static void timer_tick(struct processor *proc)
 {
-    if (core->current_timer_count > 0)
+    if (proc->current_timer_count > 0)
     {
-        if (core->current_timer_count-- == 1)
-            raise_interrupt(core, INT_TIMER);
+        if (proc->current_timer_count-- == 1)
+            raise_interrupt(proc, INT_TIMER);
     }
 }

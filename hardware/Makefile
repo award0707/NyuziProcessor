@@ -17,7 +17,8 @@
 BINDIR=../bin
 TARGET=$(BINDIR)/verilator_model
 MIN_VERILATOR_VERSION=880
-VERILATOR_OPTIONS=--unroll-count 512 --assert -Werror-IMPLICIT -Wwarn-syncasyncnet -Wwarn-blkseq \
+VERILATOR_OPTIONS=--unroll-count 512 --assert \
+	-Wall -Wno-unused -Wno-pinconnectempty -Wno-undriven -Wno-declfilename \
 	-Icore -y testbench -y fpga/common -DSIMULATION=1 -Mdir obj
 
 ifeq (${DUMP_WAVEFORM},1)

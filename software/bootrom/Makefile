@@ -19,16 +19,15 @@ TOPDIR=../../
 include $(TOPDIR)/build/target.mk
 
 CFLAGS=-O3  # Override default CFLAGS, since this builds standalone
-BASE_ADDRESS=0xfffee000
 
-SRCS=boot.c start.s
+SRCS=start.s boot.c
 
 OBJS=$(SRCS_TO_OBJS)
 DEPS=$(SRCS_TO_DEPS)
 
-boot.hex: $(OBJS) $(DEPS)
-	$(LD) -o $(OBJ_DIR)/boot.elf -Ttext=$(BASE_ADDRESS) $(OBJS) $(TOPDIR)/software/libs/compiler-rt/compiler-rt.a
-	$(ELF2HEX) -b $(BASE_ADDRESS) -o boot.hex $(OBJ_DIR)/boot.elf
+boot.bin: $(OBJS)
+	$(LD) -o $(OBJ_DIR)/boot.bin --script boot.ld --oformat binary $(OBJS) $(TOPDIR)/software/libs/compiler-rt/compiler-rt.a
+	$(TOPDIR)/tools/misc/bin2hex.py $(OBJ_DIR)/boot.bin > boot.hex
 
 clean:
 	rm -rf obj boot.hex

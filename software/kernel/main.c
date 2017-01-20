@@ -35,19 +35,10 @@ void start_timer(void)
     REGISTERS[REG_TIMER_INTERVAL] = TIMER_INTERVAL;
 }
 
-void timer_tick(void)
-{
-    REGISTERS[REG_TIMER_INTERVAL] = TIMER_INTERVAL;
-
-    // XXX will this prevent the interrupt in some cases from being
-    // delivered to other processes?
-    ack_interrupt(1);
-    reschedule();
-}
-
 void __attribute__((noreturn)) kernel_main(unsigned int _memory_size)
 {
     struct vm_translation_map *init_map;
+    struct process *init_proc;
 
     vm_page_init(_memory_size);
     init_map = vm_translation_map_init();
@@ -57,19 +48,24 @@ void __attribute__((noreturn)) kernel_main(unsigned int _memory_size)
     bool_init_kernel_process();
     boot_init_thread();
 
-    register_interrupt_handler(1, timer_tick);
-    start_timer();
-
     // Start other threads
     REGISTERS[REG_THREAD_RESUME] = 0xffffffff;
 
     spawn_kernel_thread("Grim Reaper", grim_reaper, 0);
 
-    exec_program("program.elf");
+    init_proc = exec_program("program.elf");
 
     // Idle task
     for (;;)
+    {
+        if (list_is_empty(&init_proc->thread_list))
+        {
+            kprintf("init process has exited, shutting down\n");
+            REGISTERS[REG_THREAD_HALT] = 0xffffffff;
+        }
+
         reschedule();
+    }
 }
 
 void __attribute__((noreturn)) thread_n_main(void)

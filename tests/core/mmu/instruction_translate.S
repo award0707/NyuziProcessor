@@ -19,8 +19,6 @@
 //
 // Ensure instruction/data translation are working correctly by mapping
 // code to a high address and executing it.
-// XXX for some reason, aligning noexec_page on 0x1000 also causes start to be
-// page aligned and start at 0x1000. This might break if the linker changed.
 //
 
                 .globl _start
@@ -36,12 +34,12 @@ _start:         load_tlb_entries itlb_entries, dtlb_entries
                 shl s0, s0, 31      // 0x80000000
                 move pc, s0         // Jump to address
 
-itlb_entries:   .long 0x00000000, TLB_PRESENT | TLB_EXECUTABLE | TLB_SUPERVISOR
+itlb_entries:   .long 0x00001000, 0x00001000 | TLB_PRESENT | TLB_EXECUTABLE | TLB_SUPERVISOR
                 .long 0x00001000, 0x1000 | TLB_PRESENT | TLB_EXECUTABLE | TLB_SUPERVISOR
                 .long 0x80000000, 0x00002000 | TLB_PRESENT | TLB_EXECUTABLE | TLB_SUPERVISOR
                 .long 0xffffffff, 0xffffffff
 
-dtlb_entries:   .long 0x00000000, TLB_PRESENT | TLB_SUPERVISOR
+dtlb_entries:   .long 0x00001000, 0x00001000 | TLB_PRESENT | TLB_SUPERVISOR
                 .long 0x00001000, 0x1000 | TLB_PRESENT | TLB_SUPERVISOR
                 .long 0x80000000, 0x00002000 | TLB_PRESENT | TLB_SUPERVISOR
                 .long 0xffff0000, 0xffff0000 | TLB_PRESENT | TLB_SUPERVISOR | TLB_WRITABLE
@@ -68,10 +66,10 @@ dtlb_entries:   .long 0x00000000, TLB_PRESENT | TLB_SUPERVISOR
                 goto 1b                     // Loop for next char
 3:
                 // Exit simulation
-                move s0, 0xffffffff
+                move s0, -1
                 shl s0, s0, 16
                 or s0, s0, 0x104
-                move s1, 0xffffffff
+                move s1, -1
 	            store_32 s1, (s0)
 1:	            goto 1b
 

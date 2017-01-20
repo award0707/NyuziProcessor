@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include "core.h"
+#include "processor.h"
 #include "cosimulation.h"
 #include "inttypes.h"
 #include "util.h"
@@ -37,9 +37,8 @@
 //
 
 static void print_cosim_expected(void);
-static int run_until_next_event(struct core*, uint32_t thread_id);
-static int compare_masked(uint32_t mask, const uint32_t *values1, const uint32_t *values2);
-static int parse_hex_vector(const char *str, uint32_t *vector_values, bool endian_swap);
+static bool run_until_next_event(struct processor*, uint32_t thread_id);
+static bool masked_vectors_equal(uint32_t mask, const uint32_t *values1, const uint32_t *values2);
 
 static enum
 {
@@ -59,7 +58,7 @@ static bool cosim_event_triggered;
 
 // Read events from standard in.  Step each emulator thread in lockstep
 // and ensure the side effects match.
-int run_cosimulation(struct core *core, bool verbose)
+int run_cosimulation(struct processor *proc, bool verbose)
 {
     char line[1024];
     uint32_t thread_id;
@@ -73,9 +72,9 @@ int run_cosimulation(struct core *core, bool verbose)
     bool verilog_model_halted = false;
     size_t len;
 
-    enable_cosimulation(core);
+    enable_cosimulation(proc);
     if (verbose)
-        enable_tracing(core);
+        enable_tracing(proc);
 
     while (fgets(line, sizeof(line), stdin))
     {
@@ -101,7 +100,7 @@ int run_cosimulation(struct core *core, bool verbose)
             expected_address = address;
             expected_mask = write_mask;
             memcpy(expected_values, vector_values, sizeof(uint32_t) * NUM_VECTOR_LANES);
-            if (!run_until_next_event(core, thread_id))
+            if (!run_until_next_event(proc, thread_id))
                 return -1;
         }
         else if (sscanf(line, "vwriteback %x %x %x %" PRIx64 " %s", &pc, &thread_id, &reg, &write_mask, value_str) == 5)
@@ -119,7 +118,7 @@ int run_cosimulation(struct core *core, bool verbose)
             expected_register = reg;
             expected_mask = write_mask;
             memcpy(expected_values, vector_values, sizeof(uint32_t) * NUM_VECTOR_LANES);
-            if (!run_until_next_event(core, thread_id))
+            if (!run_until_next_event(proc, thread_id))
                 return -1;
         }
         else if (sscanf(line, "swriteback %x %x %x %x", &pc, &thread_id, &reg, &scalar_value) == 4)
@@ -130,7 +129,7 @@ int run_cosimulation(struct core *core, bool verbose)
             expected_thread = thread_id;
             expected_register = reg;
             expected_values[0] = scalar_value;
-            if (!run_until_next_event(core, thread_id))
+            if (!run_until_next_event(proc, thread_id))
                 return -1;
         }
         else if (strcmp(line, "***HALTED***") == 0)
@@ -139,7 +138,7 @@ int run_cosimulation(struct core *core, bool verbose)
             break;
         }
         else if (sscanf(line, "interrupt %d %x", &thread_id, &pc) == 2)
-            cosim_interrupt(core, thread_id, pc);
+            cosim_interrupt(proc, thread_id, pc);
         else if (!verbose)
             printf("%s\n", line);	// Echo unrecognized lines to stdout (verbose already does this for all lines)
     }
@@ -155,9 +154,9 @@ int run_cosimulation(struct core *core, bool verbose)
     // cosim_mismatch will be flagged.
     cosim_event_triggered = false;
     expected_event = EVENT_NONE;
-    while (!core_halted(core))
+    while (!is_proc_halted(proc))
     {
-        execute_instructions(core, ALL_THREADS, 1);
+        execute_instructions(proc, ALL_THREADS, 1);
         if (cosim_mismatch)
             return -1;
     }
@@ -165,7 +164,7 @@ int run_cosimulation(struct core *core, bool verbose)
     return 0;
 }
 
-void cosim_check_set_scalar_reg(struct core *core, uint32_t pc, uint32_t reg, uint32_t value)
+void cosim_check_set_scalar_reg(struct processor *proc, uint32_t pc, uint32_t reg, uint32_t value)
 {
     cosim_event_triggered = true;
     if (expected_event != EVENT_SCALAR_WRITEBACK
@@ -174,7 +173,7 @@ void cosim_check_set_scalar_reg(struct core *core, uint32_t pc, uint32_t reg, ui
             || expected_values[0] != value)
     {
         cosim_mismatch = true;
-        print_registers(core, expected_thread);
+        print_registers(proc, expected_thread);
         printf("COSIM MISMATCH, thread %d\n", expected_thread);
         printf("Reference: %08x s%d <= %08x\n", pc, reg, value);
         printf("Hardware:  ");
@@ -183,7 +182,7 @@ void cosim_check_set_scalar_reg(struct core *core, uint32_t pc, uint32_t reg, ui
     }
 }
 
-void cosim_check_set_vector_reg(struct core *core, uint32_t pc, uint32_t reg, uint32_t mask,
+void cosim_check_set_vector_reg(struct processor *proc, uint32_t pc, uint32_t reg, uint32_t mask,
                                 const uint32_t *values)
 {
     int lane;
@@ -192,11 +191,11 @@ void cosim_check_set_vector_reg(struct core *core, uint32_t pc, uint32_t reg, ui
     if (expected_event != EVENT_VECTOR_WRITEBACK
             || expected_pc != pc
             || expected_register != reg
-            || !compare_masked(mask, expected_values, values)
+            || !masked_vectors_equal(mask, expected_values, values)
             || expected_mask != (mask & 0xffff))
     {
         cosim_mismatch = true;
-        print_registers(core, expected_thread);
+        print_registers(proc, expected_thread);
         printf("COSIM MISMATCH, thread %d\n", expected_thread);
         printf("Reference: %08x v%d{%04x} <= ", pc, reg, mask & 0xffff);
         for (lane = NUM_VECTOR_LANES - 1; lane >= 0; lane--)
@@ -209,7 +208,7 @@ void cosim_check_set_vector_reg(struct core *core, uint32_t pc, uint32_t reg, ui
     }
 }
 
-void cosim_check_vector_store(struct core *core, uint32_t pc, uint32_t address, uint32_t mask,
+void cosim_check_vector_store(struct processor *proc, uint32_t pc, uint32_t address, uint32_t mask,
                               const uint32_t *values)
 {
     uint64_t byte_mask;
@@ -227,10 +226,10 @@ void cosim_check_vector_store(struct core *core, uint32_t pc, uint32_t address, 
             || expected_pc != pc
             || expected_address != (address & ~(NUM_VECTOR_LANES * 4u - 1))
             || expected_mask != byte_mask
-            || !compare_masked(mask, expected_values, values))
+            || !masked_vectors_equal(mask, expected_values, values))
     {
         cosim_mismatch = true;
-        print_registers(core, expected_thread);
+        print_registers(proc, expected_thread);
         printf("COSIM MISMATCH, thread %d\n", expected_thread);
         printf("Reference: %08x memory[%x]{%016" PRIx64 "} <= ", pc, address, byte_mask);
         for (lane = NUM_VECTOR_LANES - 1; lane >= 0; lane--)
@@ -242,7 +241,7 @@ void cosim_check_vector_store(struct core *core, uint32_t pc, uint32_t address, 
     }
 }
 
-void cosim_check_scalar_store(struct core *core, uint32_t pc, uint32_t address, uint32_t size,
+void cosim_check_scalar_store(struct processor *proc, uint32_t pc, uint32_t address, uint32_t size,
                               uint32_t value)
 {
     uint32_t hardware_value;
@@ -265,7 +264,7 @@ void cosim_check_scalar_store(struct core *core, uint32_t pc, uint32_t address, 
             || hardware_value != value)
     {
         cosim_mismatch = true;
-        print_registers(core, expected_thread);
+        print_registers(proc, expected_thread);
         printf("COSIM MISMATCH, thread %d\n", expected_thread);
         printf("Reference: %08x memory[%x]{%016" PRIx64 "} <= %08x\n", pc, address & ~CACHE_LINE_MASK,
                reference_mask, value);
@@ -310,15 +309,15 @@ static void print_cosim_expected(void)
     }
 }
 
-// Returns 1 if the event matched, 0 if it did not.
-static int run_until_next_event(struct core *core, uint32_t thread_id)
+// Returns true if the event matched, false if it did not.
+static bool run_until_next_event(struct processor *proc, uint32_t thread_id)
 {
     int count = 0;
 
     cosim_mismatch = false;
     cosim_event_triggered = false;
     for (count = 0; count < 500 && !cosim_event_triggered; count++)
-        single_step(core, thread_id);
+        dbg_single_step(proc, thread_id);
 
     if (!cosim_event_triggered)
     {
@@ -330,7 +329,7 @@ static int run_until_next_event(struct core *core, uint32_t thread_id)
 }
 
 // Returns 1 if the masked values match, 0 otherwise
-static int compare_masked(uint32_t mask, const uint32_t *values1, const uint32_t *values2)
+static bool masked_vectors_equal(uint32_t mask, const uint32_t *values1, const uint32_t *values2)
 {
     int lane;
 
@@ -339,49 +338,9 @@ static int compare_masked(uint32_t mask, const uint32_t *values1, const uint32_t
         if (mask & (1 << lane))
         {
             if (values1[lane] != values2[lane])
-                return 0;
+                return false;
         }
     }
 
-    return 1;
+    return true;
 }
-
-static int parse_hex_vector(const char *str, uint32_t *vector_values, bool endian_swap)
-{
-    const char *c = str;
-    int lane;
-    int digit;
-    uint32_t lane_value;
-
-    for (lane = NUM_VECTOR_LANES - 1; lane >= 0 && *c; lane--)
-    {
-        lane_value = 0;
-        for (digit = 0; digit < 8; digit++)
-        {
-            if (*c >= '0' && *c <= '9')
-                lane_value = (lane_value << 4) | (uint32_t) (*c - '0');
-            else if (*c >= 'a' && *c <= 'f')
-                lane_value = (lane_value << 4) | (uint32_t) (*c - 'a' + 10);
-            else if (*c >= 'A' && *c <= 'F')
-                lane_value = (lane_value << 4) | (uint32_t) (*c - 'A' + 10);
-            else
-            {
-                printf("bad character %c in hex vector\n", *c);
-                return -1;
-            }
-
-            if (*c == '\0')
-            {
-                printf("Error parsing hex vector\n");
-                break;
-            }
-            else
-                c++;
-        }
-
-        vector_values[lane] = endian_swap ? endian_swap32(lane_value) : lane_value;
-    }
-
-    return 0;
-}
-

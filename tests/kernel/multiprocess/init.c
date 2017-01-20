@@ -25,4 +25,7 @@ int main()
 
     for (i = 0; i < 5; i++)
         exec("memtest.elf");
+
+    // XXX need to wait for processes
+    while (1);
 }

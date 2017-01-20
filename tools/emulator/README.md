@@ -28,7 +28,8 @@ output and a mass storage device.
 | -f   |  widthxheight             | Display framebuffer output in window             |
 | -d   |  filename,start,length    | Dump memory                                      |
 | -b   |  filename                 | Load file into virtual block device              |
-| -t   |  num                      | Total threads (default 4)                        |
+| -t   |  num                      | Threads per core (default 4)                     |
+| -p   |  num                      | Number of cores (default 1)                      |
 | -c   |  size                     | Total amount of memory                           |
 | -r   |  instructions             | Screen refresh rate, number of instructions to execute between screen updates |
 | -s   |  filename                 | Create the file and map emulated system memory onto it as a shared memory object |
@@ -75,14 +76,10 @@ The steps to run the debugger manually are:
         /usr/local/llvm-nyuzi/bin/lldb --arch nyuzi <program>.elf -o "gdb-remote 8000"
 
 Other notes:
-- This is new and still has bugs and missing functionality.
-- Does not support writing memory (or operations that require it)
 - The emulator does not support the debugger in cosimulation mode.
 - Debugging works better if you compile the program with optimizations disabled.
   For example, at -O3, lldb cannot read variables if they are not live at the
   execution point.
-- Debugger only currently works with four threads enabled. There are a few hardcoded assumptions
-  of four threads in remote-gdb.c.
 - The debugger does not work with virtual memory enabled.
 
 ### Tracing

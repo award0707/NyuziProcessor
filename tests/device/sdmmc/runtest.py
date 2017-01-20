@@ -15,28 +15,27 @@
 # limitations under the License.
 #
 
-import sys
-import os
+"""Test reading blocks from SDMMC device"""
 
-#
-# Test reading blocks from SDMMC device
-#
+import os
+import sys
 
 sys.path.insert(0, '../..')
-from test_harness import *
+import test_harness
 
 FILE_SIZE = 8192
 SOURCE_BLOCK_DEV = 'bdevimage.bin'
 MEMDUMP = 'memory.bin'
 
 
-def test_read(name):
+@test_harness.test_all_envs
+def sdmmc_read(name):
     # Create random file
-    with open(SOURCE_BLOCK_DEV, 'wb') as f:
-        f.write(os.urandom(FILE_SIZE))
+    with open(SOURCE_BLOCK_DEV, 'wb') as randfile:
+        randfile.write(os.urandom(FILE_SIZE))
 
-    build_program(['sdmmc_read.c'])
-    run_program(
+    test_harness.build_program(['sdmmc_read.c'])
+    test_harness.run_program(
         environment='emulator' if name.endswith('_emulator') else 'verilator',
         block_device=SOURCE_BLOCK_DEV,
         dump_file=MEMDUMP,
@@ -44,7 +43,6 @@ def test_read(name):
         dump_length=FILE_SIZE,
         flush_l2=True)
 
-    assert_files_equal(SOURCE_BLOCK_DEV, MEMDUMP, 'file mismatch')
+    test_harness.assert_files_equal(SOURCE_BLOCK_DEV, MEMDUMP, 'file mismatch')
 
-register_tests(test_read, ['sdmmc_read_emulator', 'sdmmc_read_verilator'])
-execute_tests()
+test_harness.execute_tests()

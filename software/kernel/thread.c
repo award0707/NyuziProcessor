@@ -29,10 +29,13 @@ extern __attribute__((noreturn)) void  jump_to_user_mode(
     void *argv,
     unsigned int inital_pc,
     unsigned int user_stack_ptr);
+extern void start_timer(void);
 extern void context_switch(unsigned int **old_stack_ptr_ptr,
                            unsigned int *new_stack_ptr);
+static void timer_tick(void);
 
 struct thread *cur_thread[MAX_HW_THREADS];
+static int disable_preempt_count[MAX_HW_THREADS];
 static spinlock_t thread_q_lock;
 static struct list_node ready_q;
 static struct list_node dead_q;
@@ -80,6 +83,9 @@ void boot_init_thread(void)
     list_add_tail(&kernel_proc->thread_list, &th->process_entry);
     release_spinlock(&kernel_proc->lock);
     restore_interrupts(old_flags);
+
+    register_interrupt_handler(1, timer_tick);
+    start_timer();
 }
 
 struct thread *current_thread(void)
@@ -136,6 +142,14 @@ struct thread *spawn_thread_internal(const char *name,
     return th;
 }
 
+static void timer_tick(void)
+{
+    start_timer();
+    ack_interrupt(1);
+    if (disable_preempt_count[current_hw_thread()] == 0)
+        reschedule();
+}
+
 static void destroy_thread(struct thread *th)
 {
     struct process *proc = th->proc;
@@ -164,12 +178,20 @@ static void destroy_thread(struct thread *th)
     VM_DEBUG("free kernel stack\n");
     destroy_area(th->proc->space, th->kernel_stack_area);
     slab_free(&thread_slab, th);
+    dec_proc_ref(proc);
+}
 
-    if (list_is_empty(&proc->thread_list))
+void dec_proc_ref(struct process *proc)
+{
+    int old_flags;
+
+    assert(current_thread()->proc != proc);
+
+    if (__sync_add_and_fetch(&proc->ref_count, -1) == 0)
     {
         VM_DEBUG("destroying process %d\n", proc->id);
+        assert(list_is_empty(&proc->thread_list));
 
-        // Need to clean up the process
         old_flags = disable_interrupts();
         acquire_spinlock(&process_list_lock);
         list_remove_node(proc);
@@ -263,6 +285,8 @@ void reschedule(void)
     struct thread *next_thread;
     int old_flags;
 
+    assert(!disable_preempt_count[hwthread]);
+
     // Put current thread back on ready queue
 
     old_flags = disable_interrupts();
@@ -292,6 +316,16 @@ void reschedule(void)
     restore_interrupts(old_flags);
 }
 
+void disable_preempt(void)
+{
+    __sync_fetch_and_add(&disable_preempt_count[current_hw_thread()], 1);
+}
+
+void enable_preempt(void)
+{
+    __sync_fetch_and_add(&disable_preempt_count[current_hw_thread()], -1);
+}
+
 static void __attribute__((noreturn)) new_process_start(void)
 {
     struct thread *th = current_thread();
@@ -316,6 +350,7 @@ struct process *exec_program(const char *filename)
     proc->id = __sync_fetch_and_add(&next_process_id, 1);
     proc->space = create_address_space();
     proc->lock = 0;
+    proc->ref_count = 2; // one ref for thread, one for returned pointer
     list_init(&proc->thread_list);
 
     old_flags = disable_interrupts();

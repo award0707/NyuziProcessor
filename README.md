@@ -3,16 +3,13 @@
 [![Chat at https://gitter.im/jbush001/NyuziProcessor](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/jbush001/NyuziProcessor?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 Nyuzi is an experimental multicore GPGPU processor. It supports vector floating
-point, hardware multithreading, and cache coherence. The SystemVerilog-based
-hardware implementation is synthesizable and runs on FPGA. This project also
-includes an LLVM-based C++ toolchain, tests, and other tools. It is useful
-for microarchitecture experimentation, performance modeling, and parallel
-software development.
+point, hardware multithreading, virtual memory, and cache coherence. The
+SystemVerilog-based hardware implementation is synthesizable and runs on FPGA.
+This project also includes an LLVM-based C++ toolchain.
 
 **Documentation:** https://github.com/jbush001/NyuziProcessor/wiki<br/>
 **Mailing list:** https://groups.google.com/forum/#!forum/nyuzi-processor-dev<br/>
 **License:** Apache 2.0<br/>
-**Blog:** http://latchup.blogspot.com/<br/>
 
 # Getting Started
 
@@ -26,7 +23,7 @@ which allow hardware and software development without an FPGA.
 
 This requires Ubuntu 16 (Xenial Xeres) or later to get the proper package
 versions. It should work for other distributions, but you will probably need
-to change some package names.
+to change some package names. From a terminal, execute the following:
 
     sudo apt-get -y install autoconf cmake make gcc g++ bison flex python \
         perl emacs openjdk-8-jdk swig zlib1g-dev python-dev libxml2-dev \
@@ -39,15 +36,13 @@ The makefile executes this operation in batch mode*
 
 These instruction assume OSX Mavericks or later.
 
-Open the AppStore application, search for XCode and install it.
-
-Install MacPorts (https://www.macports.org/install.php)
-
-Install the command line compiler tools:
+Open the AppStore application, search for XCode and install it. Install the
+command line compiler tools by opening Terminal and typing the following:
 
     xcode-select --install
 
-Installs the remaining packages using MacPorts.
+Install MacPorts (https://www.macports.org/install.php), and use it to install
+the remaining packages:
 
     sudo port install cmake bison swig swig-python imagemagick libsdl2 curl emacs
 
@@ -65,7 +60,7 @@ Linux under a virtual machine like [VirtualBox](https://www.virtualbox.org/wiki/
 The following script will download and install the
 [Nyuzi toolchain](https://github.com/jbush001/NyuziToolchain) and
 [Verilator](http://www.veripool.org/wiki/verilator) Verilog simulator.
-(Although some Linux package managers have Verilator, they have old versions).
+Although some Linux package managers have Verilator, they have old versions.
 It will ask for your root password a few times to install stuff.
 
     build/setup_tools.sh
@@ -80,7 +75,7 @@ Run tests:
 
 _If you are on a Linux distribution that defaults to python3, you may run into build
 problems with the compiler. In tools/NyuziToolchain/tools/CMakeLists.txt, comment
-out the following line:_
+out the following line:
 
     add_llvm_external_project(lldb)
 
@@ -88,7 +83,6 @@ Occasionally a change will require a new version of the compiler. To rebuild:
 
     git submodule update
     cd tools/NyuziToolchain/build
-    sudo chown -R `whoami` .
     make
     sudo make install
 
@@ -98,7 +92,7 @@ Sample applications are available in [software/apps](software/apps). You can
 run these in the emulator by typing 'make run' (some need 3rd party data
 files, details are in the READMEs in those directories).
 
-For example, this will render a 3D model:
+For example, this will render a 3D model in the emulator:
 
     cd software/apps/sceneview
     make run
@@ -106,4 +100,3 @@ For example, this will render a 3D model:
 # Running on FPGA
 
 See instructions in hardware/fpga/de2-115/README.md
-

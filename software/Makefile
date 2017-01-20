@@ -14,38 +14,17 @@
 # limitations under the License.
 #
 
-
-JAVAC := $(shell which javac)
-
 all:
-	cd libs/libc && make
-	cd libs/librender && make
-	cd libs/libos && make
-	cd libs/compiler-rt && make
+	cd libs && make
+	cd apps && make
+	cd benchmarks && make
 	cd bootrom && make
-	cd apps/mandelbrot && make
-	cd apps/plasma && make
-	cd apps/quakeview && make
-	cd apps/rotozoom && make
-	cd apps/sceneview && make
-	cd benchmarks/hash && make
-	cd benchmarks/membench && make
 	cd kernel && make
 
 clean:
-	cd libs/libc && make clean
-	cd libs/librender && make clean
-	cd libs/libos && make clean
-	cd libs/compiler-rt && make clean
+	cd libs && make clean
+	cd apps && make clean
+	cd benchmarks && make clean
 	cd bootrom && make clean
-	cd apps/mandelbrot && make clean
-	cd apps/plasma && make clean
-	cd apps/quakeview && make clean
-	cd apps/rotozoom && make clean
-	cd apps/sceneview && make clean
-	cd benchmarks/hash && make clean
-	cd benchmarks/membench && make clean
 	cd kernel && make clean
-
-FORCE:
 
