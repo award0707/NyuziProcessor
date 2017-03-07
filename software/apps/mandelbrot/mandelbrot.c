@@ -86,7 +86,7 @@ int main()
             }
 
             // Set pixels inside set black and increase contrast
-            *ptr = vector_mixi(mask_cmpi_uge(iteration, (veci16_t) 255),
+             *ptr = vector_mixi(mask_cmpi_uge(iteration, (veci16_t) 255),
                     (veci16_t) 0, (iteration << 2) + 80) | (veci16_t) 0xff000000;
             asm("dflush %0" : : "s" (ptr++));
             x0 += kXStep * kVectorLanes;

@@ -184,7 +184,7 @@ module instruction_decode_stage(
             7'b10_1_1110: dlut_out = {F, T, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, T, F, T, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F};
 
             // Locking load
-            7'b10_1_1011: dlut_out = {F, F, T, IMM_24_15, SCLR1_4_0, SCLR2_14_10, T, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_SCALAR2, F, F}; 
+            7'b10_1_1011: dlut_out = {F, F, T, IMM_24_10, SCLR1_4_0, SCLR2_NONE, T, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_ALL_ONES, F, F}; 
 
             // Format C (cache control)
             7'b1110_000: dlut_out = {F, F, F,  IMM_24_15, SCLR1_4_0, SCLR2_9_5,  F, F, F, F, OP2_SRC_IMMEDIATE, MASK_SRC_ALL_ONES, F, F};

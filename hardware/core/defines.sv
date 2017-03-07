@@ -315,7 +315,8 @@ typedef enum logic[3:0] {
     L2REQ_FLUSH,
     L2REQ_IINVALIDATE,
     L2REQ_DINVALIDATE,
-    L2REQ_LOCK
+    L2REQ_LOAD_LOCK,
+    L2REQ_STORE_LOCK
 } l2req_packet_type_t;
 
 typedef struct packed {

@@ -118,7 +118,8 @@ module l2_cache_read_stage(
     assign writeback_way = l2t_request.packet_type == L2REQ_FLUSH
         ? hit_way_idx : l2t_fill_way;
     assign is_dinvalidate = l2t_request.packet_type == L2REQ_DINVALIDATE;
-    assign is_lock = l2t_request.packet_type == L2REQ_LOCK;
+    assign is_lock = l2t_request.packet_type == L2REQ_LOAD_LOCK || 
+                     l2t_request.packet_type == L2REQ_STORE_LOCK;
 
     //
     // Check for cache hit
@@ -200,13 +201,14 @@ module l2_cache_read_stage(
     //
     // Update LRU
     //
-    assign l2r_update_lru_en = cache_hit && (is_load || is_store || is_lock);
+    assign l2r_update_lru_en = cache_hit && (is_load || is_store);
     assign l2r_update_lru_hit_way = hit_way_idx;
 
     //
     // Lock request
     //
-    assign l2r_lock_en = l2t_request.packet_type == L2REQ_LOCK;
+    assign l2r_lock_en = l2t_request.packet_type == L2REQ_LOAD_LOCK ||
+                         l2t_request.packet_type == L2REQ_STORE_LOCK;
     assign l2r_lock_value = is_lock;
 
     //
@@ -220,7 +222,8 @@ module l2_cache_read_stage(
 
     // Performance events
     assign is_hit_or_miss = l2t_request_valid && (l2t_request.packet_type == L2REQ_STORE || can_store_sync
-        || l2t_request.packet_type == L2REQ_LOAD || l2t_request.packet_type == L2REQ_LOCK) && !l2t_is_l2_fill;
+        || l2t_request.packet_type == L2REQ_LOAD || l2t_request.packet_type == L2REQ_LOAD_LOCK
+        || l2t_request.packet_type == L2REQ_STORE_LOCK) && !l2t_is_l2_fill;
     assign perf_l2_miss = is_hit_or_miss && !(|hit_way_oh);
     assign perf_l2_hit = is_hit_or_miss && |hit_way_oh;
 

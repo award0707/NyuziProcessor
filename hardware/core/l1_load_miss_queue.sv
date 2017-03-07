@@ -94,6 +94,7 @@ module l1_load_miss_queue(
             assign collided_miss_oh[wait_entry] = pending_entries[wait_entry].valid
                 && pending_entries[wait_entry].address == cache_miss_addr
                 && !pending_entries[wait_entry].synchronized
+                //&& !pending_entries[wait_entry].lock
                 && !cache_miss_synchronized;
             assign arbiter_request[wait_entry] = pending_entries[wait_entry].valid
                 && !pending_entries[wait_entry].request_sent;

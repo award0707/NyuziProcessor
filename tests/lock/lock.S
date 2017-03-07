@@ -28,6 +28,10 @@ _start:         load_32     s0, device_addr # LED Device address
                 load_32     s3, delay       # Delay
                 load_32     s5, test_lock_addr
                 lock        s5, (s5)
+                load_32     s6, test_lock_addr2
+                lock        s5, (s6)
+                load_32     s7, test_lock_addr3
+                lock        s5, (s7)
                 
 
 loop0:          store_32    s1, (s0)        # Update LEDs
@@ -49,3 +53,5 @@ delay0:         sub_i       s4, s4, 1
 device_addr:    .long 0xFFFF0000
 delay:          .long 100000
 test_lock_addr: .long 0x00050000
+test_lock_addr2: .long 0x00500000 
+test_lock_addr3: .long 0x00250000

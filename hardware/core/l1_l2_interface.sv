@@ -113,9 +113,10 @@ module l1_l2_interface
     input                                         dd_store_en,
     input                                         dd_flush_en,
     input                                         dd_membar_en,
-    input                                         dd_lock_en,
+    input                                         dd_load_lock,
     input                                         dd_iinvalidate_en,
     input                                         dd_dinvalidate_en,
+    input                                         dd_store_lock,
     input [`CACHE_LINE_BYTES - 1:0]               dd_store_mask,
     input cache_line_index_t                      dd_store_addr,
     input cache_line_data_t                       dd_store_data,
@@ -150,6 +151,7 @@ module l1_l2_interface
     logic icache_dequeue_ack;
     logic dcache_dequeue_ready;
     logic dcache_dequeue_ack;
+    logic dcache_dequeue_l2_lock;
     cache_line_index_t dcache_dequeue_addr;
     logic dcache_dequeue_synchronized;
     cache_line_index_t icache_dequeue_addr;
@@ -166,7 +168,6 @@ module l1_l2_interface
     logic storebuf_l2_sync_success;
     logic response_is_iinvalidate;
     logic response_is_dinvalidate;
-    logic dcache_l2_lock;
 
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
@@ -181,6 +182,7 @@ module l1_l2_interface
     logic               sq_dequeue_synchronized;// From l1_store_queue of l1_store_queue.v
     thread_bitmap_t     sq_wake_bitmap;         // From l1_store_queue of l1_store_queue.v
     // End of automatics
+    logic               sq_dequeue_l2_lock;        // locking store
 
     l1_store_queue l1_store_queue(.*);
 
@@ -190,7 +192,7 @@ module l1_l2_interface
         .cache_miss_addr(dd_cache_miss_addr),
         .cache_miss_thread_idx(dd_cache_miss_thread_idx),
         .cache_miss_synchronized(dd_cache_miss_synchronized),
-        .cache_lock(dd_lock_en),
+        .cache_lock(dd_load_lock),
 
         // Next request
         .dequeue_ready(dcache_dequeue_ready),
@@ -198,7 +200,7 @@ module l1_l2_interface
         .dequeue_addr(dcache_dequeue_addr),
         .dequeue_idx(dcache_dequeue_idx),
         .dequeue_synchronized(dcache_dequeue_synchronized),
-        .dequeue_lock(dcache_l2_lock),
+        .dequeue_lock(dcache_dequeue_l2_lock),
 
         // Wake threads when a transaction is complete
         .l2_response_valid(dcache_l2_response_valid),
@@ -409,8 +411,8 @@ module l1_l2_interface
         begin
             // Send data cache request packet
             l2i_request_valid = 1;
-            if(dcache_l2_lock)
-                l2i_request.packet_type = L2REQ_LOCK;
+            if(dcache_dequeue_l2_lock)
+                l2i_request.packet_type = L2REQ_LOAD_LOCK;
             else
                 l2i_request.packet_type = dcache_dequeue_synchronized ? L2REQ_LOAD_SYNC : L2REQ_LOAD;
             l2i_request.id = dcache_dequeue_idx;
@@ -438,6 +440,8 @@ module l1_l2_interface
                 l2i_request.packet_type = L2REQ_IINVALIDATE;
             else if (sq_dequeue_dinvalidate)
                 l2i_request.packet_type = L2REQ_DINVALIDATE;
+            else if (sq_dequeue_l2_lock)
+                l2i_request.packet_type = L2REQ_STORE_LOCK;
             else
                 l2i_request.packet_type = L2REQ_STORE;
 

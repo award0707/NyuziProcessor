@@ -1,0 +1,98 @@
+#include <nyuzi.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <performance_counters.h>
+
+#define DIM 150 
+
+void lock(intptr_t addr)
+{
+      __asm("move s4, %0"
+          "lock s5, (s4)" 
+            :
+            : "m" (addr)
+            : "s5", "s4"); 
+}
+
+void load(intptr_t addr)
+{
+     __asm("move s4, %0"
+          "load_32 s5, (s4)" 
+            :
+            : "m" (addr)
+            : "s5", "s4"); 
+}
+
+int main()
+{
+//    volatile int locked[DIM][DIM];
+//    volatile int other[DIM][DIM];
+    int th[100], m[100], in[100];
+    int hits_i, misses_i, inst_i;
+    
+    printf("------------------------------------------------------------------------------\n");
+
+//#define LOCK
+#ifdef LOCK
+        printf("LOCK enabled\n");
+//       for(int i=0; i<DIM; i++) {
+//           for(int j=0; j<DIM; j++) {
+//               lock((intptr_t)&locked[j][i]);
+//           }
+//        }
+        for(int i=0; i<100; i++) {
+            lock((intptr_t)&th[i]);
+            lock((intptr_t)&m[i]);
+            lock((intptr_t)&in[i]);
+        }
+#else
+        printf("Lock disabled\n");
+        
+//       for(int i=0; i<DIM; i++) {
+//           for(int j=0; j<DIM; j++) {
+//               load((intptr_t)&locked[j][i]);
+//           }
+//       }
+        
+#endif
+
+        set_perf_counter_event(0,PERF_L2_HIT);
+        set_perf_counter_event(1,PERF_L2_MISS);
+        set_perf_counter_event(2,PERF_INSTRUCTION_ISSUED);
+        hits_i = read_perf_counter(0);
+        misses_i = read_perf_counter(1);
+        inst_i = read_perf_counter(2);
+
+/*           for(int i=0; i<DIM; i++) {
+            for(int j=0; j<DIM; j++) {
+                other[j][i]++;
+            }
+        }*/
+
+       for(int i=0; i<100; i++) { 
+         th[i] = read_perf_counter(0);
+         m[i] = read_perf_counter(1);
+         in[i] = read_perf_counter(2);
+        }
+        
+        printf("Initial: %d hits, %d misses, %d instructions issued\n", 
+                hits_i, misses_i, inst_i);
+        for(int i=0; i<100; i++)
+            printf("After reading other: %d hits, %d misses, %d instructions issued\n",
+                th[i]-hits_i, m[i]-misses_i, in[i]-inst_i);
+/*                
+
+        for(int i=0; i<DIM; i++) {
+            for(int j=0; j<DIM; j++) {
+                locked[j][i]++;
+            }
+        }
+
+        hits = read_perf_counter(0);
+        misses = read_perf_counter(1);
+        printf("Re-read locked: %d hits, %d misses, %d instructions issued\n",
+                hits, misses, read_perf_counter(2));*/
+        printf("------------------------------------------------------------------------------\n");
+
+    return 0;
+}

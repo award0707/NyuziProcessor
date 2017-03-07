@@ -32,7 +32,7 @@
 #include <unistd.h>
 #include "../../software/bootrom/protocol.h"
 
-#define DEFAULT_UART_BAUD 38400
+#define DEFAULT_UART_BAUD 57600
 #define RAMDISK_BASE 0x4000000
 #define BLOCK_SIZE 1024
 #define PROGRESS_BAR_WIDTH 40

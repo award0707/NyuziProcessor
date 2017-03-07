@@ -21,6 +21,7 @@
 #include <schedule.h>
 #include <time.h>
 #include <vga.h>
+#include <performance_counters.h>
 #include "Barrier.h"
 
 //
@@ -163,9 +164,8 @@ int main()
                           | uint32_t(128 + 127 * sin(M_PI * i / (NUM_PALETTE_ENTRIES / 2)));
 #endif
         }
-
         start_all_threads();
-    }
+     }
 
     for (;;)
     {
@@ -203,7 +203,6 @@ int main()
                     float deltaTime = (float)(currentTime - lastTime) / CLOCKS_PER_SEC;
                     printf("%g fps\n", (float) 16 / deltaTime);
                 }
-
                 lastTime = currentTime;
             }
         }

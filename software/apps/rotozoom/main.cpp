@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+#include <performance_counters.h>
 #include <vga.h>
 #include "Barrier.h"
 #include "image.h"
@@ -41,6 +42,7 @@ int main()
 {
     int frameNum = 0;
     clock_t lastTime = 0;
+    int lastmisses = 0, misses = 0;
 
     int myThreadId = get_current_thread_id();
     if (myThreadId == 0)
@@ -48,6 +50,9 @@ int main()
         frameBuffer = (veci16_t*) init_vga(VGA_MODE_640x480);
         displayMatrix = Matrix2x2();
     }
+
+    set_perf_counter_event(0,PERF_L2_HIT);
+    set_perf_counter_event(1,PERF_L2_MISS);
 
     start_all_threads();
 
@@ -94,9 +99,13 @@ int main()
                 if (lastTime != 0)
                 {
                     float deltaTime = (float)(currentTime - lastTime) / CLOCKS_PER_SEC;
+                    misses = read_perf_counter(1);
                     printf("%g fps\n", (float) 32 / deltaTime);
-                }
+                    printf("%d hits, %d misses, %g misses per second\n", read_perf_counter(0), misses,
+                                 (float)(misses-lastmisses)/deltaTime);
 
+                }
+                lastmisses = misses;
                 lastTime = currentTime;
             }
         }

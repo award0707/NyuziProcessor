@@ -55,7 +55,8 @@ module l2_cache_update_stage(
 
     assign original_data = l2r_is_l2_fill ? l2r_data_from_memory : l2r_data;
     assign update_data = l2r_request.packet_type == L2REQ_STORE
-        || (l2r_request.packet_type == L2REQ_STORE_SYNC && l2r_store_sync_success);
+        || (l2r_request.packet_type == L2REQ_STORE_SYNC && l2r_store_sync_success)
+        || l2r_request.packet_type == L2REQ_STORE_LOCK;
 
     genvar byte_lane;
     generate
@@ -69,7 +70,7 @@ module l2_cache_update_stage(
 
     assign l2u_write_en = l2r_request_valid
         && (l2r_is_l2_fill || (l2r_cache_hit && (l2r_request.packet_type == L2REQ_STORE
-        || l2r_request.packet_type == L2REQ_STORE_SYNC)));
+        || l2r_request.packet_type == L2REQ_STORE_SYNC || l2r_request.packet_type == L2REQ_STORE_LOCK)));
     assign l2u_write_addr = l2r_hit_cache_idx;
 
     // Response packet type
@@ -78,11 +79,12 @@ module l2_cache_update_stage(
         case (l2r_request.packet_type)
             L2REQ_LOAD,
             L2REQ_LOAD_SYNC,
-            L2REQ_LOCK:
+            L2REQ_LOAD_LOCK:
                 response_type = L2RSP_LOAD_ACK;
 
             L2REQ_STORE,
-            L2REQ_STORE_SYNC:
+            L2REQ_STORE_SYNC,
+            L2REQ_STORE_LOCK:
                 response_type = L2RSP_STORE_ACK;
 
             L2REQ_FLUSH:

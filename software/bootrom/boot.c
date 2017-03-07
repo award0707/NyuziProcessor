@@ -23,7 +23,7 @@
 //
 
 #define CLOCK_RATE 50000000
-#define DEFAULT_UART_BAUD 38400 
+#define DEFAULT_UART_BAUD 57600 
 
 enum register_index
 {

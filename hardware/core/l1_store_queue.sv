@@ -32,7 +32,7 @@ module l1_store_queue(
     // To instruction_decode_stage
     output thread_bitmap_t                sq_sync_store_pending,
 
-    // From dache_data_stage
+    // From dcache_data_stage
     input                                  dd_store_en,
     input                                  dd_flush_en,
     input                                  dd_membar_en,
@@ -45,6 +45,7 @@ module l1_store_queue(
     input thread_idx_t                     dd_store_thread_idx,
     input cache_line_index_t               dd_store_bypass_addr,
     input thread_idx_t                     dd_store_bypass_thread_idx,
+    input                                  dd_store_lock,
 
     // To writeback_stage
     output logic [`CACHE_LINE_BYTES - 1:0] sq_store_bypass_mask,
@@ -61,6 +62,7 @@ module l1_store_queue(
     output logic                           sq_dequeue_flush,
     output logic                           sq_dequeue_iinvalidate,
     output logic                           sq_dequeue_dinvalidate,
+    output logic                           sq_dequeue_l2_lock,
     output logic                           sq_rollback_en,
     output thread_bitmap_t                 sq_wake_bitmap,
 
@@ -75,6 +77,7 @@ module l1_store_queue(
         logic flush;
         logic iinvalidate;
         logic dinvalidate;
+        logic l2_lock;
         logic request_sent;
         logic response_received;
         logic sync_success;
@@ -233,6 +236,7 @@ module l1_store_queue(
                             pending_stores[thread_idx].dinvalidate <= 0;
                             pending_stores[thread_idx].request_sent <= 0;
                             pending_stores[thread_idx].response_received <= 0;
+                            pending_stores[thread_idx].l2_lock <= dd_store_lock;
                         end
                     end
                     else if (enqueue_cache_control)
@@ -247,6 +251,7 @@ module l1_store_queue(
                         pending_stores[thread_idx].dinvalidate <= dd_dinvalidate_en;
                         pending_stores[thread_idx].request_sent <= 0;
                         pending_stores[thread_idx].response_received <= 0;
+                        pending_stores[thread_idx].l2_lock <= 0;
                     end
 
                     // If this got a response *and* hasn't queued a new one over the top of it in the
@@ -288,6 +293,7 @@ module l1_store_queue(
     assign sq_dequeue_flush = pending_stores[send_grant_idx].flush;
     assign sq_dequeue_iinvalidate = pending_stores[send_grant_idx].iinvalidate;
     assign sq_dequeue_dinvalidate = pending_stores[send_grant_idx].dinvalidate;
+    assign sq_dequeue_l2_lock = pending_stores[send_grant_idx].l2_lock;
 
     always_ff @(posedge clk)
     begin
